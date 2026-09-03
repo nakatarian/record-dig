@@ -37,9 +37,11 @@ CATEGORIES = [
 GENRE_MAP = {
     "deep house": "Deep House",
     "deep tech house": "Deep House",
+    "deep tech": "Deep House",
     "tech house": "Tech House",
     "minimal house": "Minimal",
-    "minimal": "Minimal"
+    "minimal": "Minimal",
+    "minimal techno": "Minimal"
 }
 
 HEADERS = {
@@ -169,7 +171,8 @@ def scrape_and_update():
                 for elem in detail_soup.find_all(string=True):
                     txt = elem.strip()
                     if txt.startswith("#"):
-                        clean_tag = txt.lstrip("#").strip().lower()
+                        # '#DEEP TECH HOUSE' -> 'deep tech house' に正規化
+                        clean_tag = re.sub(r'\s+', ' ', txt.lstrip("#").strip().lower())
                         if clean_tag in GENRE_MAP and GENRE_MAP[clean_tag] not in detected_genres:
                             detected_genres.append(GENRE_MAP[clean_tag])
 
