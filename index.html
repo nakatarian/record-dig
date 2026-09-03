@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Record Dig App</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --bg-color: #0f1115;
+      --card-bg: #181b20;
+      --card-hover: #22262e;
+      --text-main: #f0f2f5;
+      --text-sub: #8c96a5;
+      --accent-color: #2563eb;
+      --badge-bg: #1e293b;
+      --badge-text: #60a5fa;
+      --modal-bg: #161920;
+      --modal-card-bg: #1e222b;
+      --soldout-bg: #475569;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      padding: 16px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      max-width: 1200px;
+      margin: 0 auto 16px auto;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .title-area { display: flex; align-items: center; gap: 10px; }
+    .logo { font-size: 18px; font-weight: 700; }
+    .last-updated {
+      font-size: 10px;
+      color: var(--text-sub);
+      background-color: var(--card-bg);
+      padding: 3px 8px;
+      border-radius: 12px;
+    }
+
+    /* ★ スマホ画面にピタッと収まる超コンパクトなフィルターバー ★ */
+    .category-filter {
+      display: flex;
+      gap: 6px;                  /* ボタン同士の間隔を少し狭く(8px→6px) */
+      width: 100%;
+      overflow-x: auto;
+      white-space: nowrap;
+      padding-bottom: 2px;
+      -webkit-overflow-scrolling: touch;
+      justify-content: space-between; /* 画面幅いっぱいにキレイに整列 */
+    }
+    .category-filter::-webkit-scrollbar {
+      display: none;
+    }
+    .filter-btn {
+      flex: 1;                   /* 均等な幅でぴったり収める */
+      min-width: max-content;    /* 文字がつぶれない最小幅を確保 */
+      text-align: center;
+      background-color: var(--card-bg);
+      color: var(--text-sub);
+      border: none;
+      padding: 6px 10px;         /* 余白を削減(8px 18px → 6px 10px) */
+      border-radius: 16px;
+      font-size: 11px;           /* 文字サイズをコンパクト化(12px → 11px) */
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .filter-btn.active { background-color: var(--accent-color); color: #fff; }
+    
+    /* レコードカード一覧 */
+    .grid-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    @media (min-width: 600px) {
+      .grid-container { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+    }
+    .card {
+      background-color: var(--card-bg);
+      border-radius: 12px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.15s ease, background-color 0.15s ease;
+      position: relative;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      background-color: var(--card-hover);
+    }
+    .card.sold-out {
+      opacity: 0.75;
+    }
+    .image-wrapper {
+      position: relative;
+      width: 100%;
+      padding-top: 100%;
+      background-color: #252930;
+    }
+    .image-wrapper img {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    .soldout-badge {
+      position: absolute;
+      top: 8px; right: 8px;
+      font-size: 9px; font-weight: 800;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: var(--soldout-bg);
+      color: #fff;
+      z-index: 2;
+    }
+    .card-content {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* 複数ジャンル用コンテナ & カプセル型タグデザイン */
+    .genre-badges-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 2px;
+    }
+    .genre-badge {
+      display: inline-block;
+      background-color: rgba(30, 64, 175, 0.35);
+      color: #60a5fa;
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      line-height: 1.4;
+    }
+
+    .record-title {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.3;
+      display: -webkit-box;
+      line-clamp: 2;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .record-meta {
+      font-size: 10px;
+      color: var(--text-sub);
+    }
+
+    /* モーダル (再生画面) */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background-color: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s ease;
+    }
+    .modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+    .modal-container {
+      background-color: var(--modal-bg);
+      width: 90%;
+      max-width: 440px;
+      max-height: 85vh;
+      border-radius: 16px;
+      padding: 20px;
+      overflow-y: auto;
+      position: relative;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .modal-close {
+      position: absolute;
+      top: 16px; right: 16px;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: var(--text-sub);
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-header {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .modal-cover {
+      width: 80px; height: 80px;
+      border-radius: 8px;
+      object-fit: cover;
+      background-color: #252930;
+    }
+    .modal-header-info {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+      padding-right: 24px;
+    }
+    .modal-title { font-size: 14px; font-weight: 700; }
+    .modal-meta { font-size: 11px; color: var(--text-sub); }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 16px;
+    }
+    .external-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background-color: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      transition: background-color 0.15s ease;
+    }
+    .external-btn:hover {
+      background-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .track-list-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--text-sub);
+      margin-bottom: 12px;
+    }
+    .track-item {
+      background-color: var(--modal-card-bg);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .track-name {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .track-audio {
+      width: 100%;
+      height: 36px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title-area">
+      <div class="logo">🎵 Record Dig</div>
+      <span class="last-updated" id="last-updated-text">更新日時: --</span>
+    </div>
+    <!-- ★ スマホ幅で1行にすっきり納まるボタンバー ★ -->
+    <div class="category-filter">
+      <button class="filter-btn active" onclick="filterGenre('ALL', this)">ALL</button>
+      <button class="filter-btn" onclick="filterGenre('Tech House', this)">TECH HOUSE</button>
+      <button class="filter-btn" onclick="filterGenre('Deep House', this)">DEEP HOUSE</button>
+      <button class="filter-btn" onclick="filterGenre('Minimal', this)">MINIMAL</button>
+    </div>
+  </header>
+
+  <!-- レコード一覧 -->
+  <div class="grid-container" id="records-grid"></div>
+
+  <!-- 再生用モーダル -->
+  <div class="modal-overlay" id="player-modal" onclick="closeModal(event)">
+    <div class="modal-container" onclick="event.stopPropagation()">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <div class="modal-header">
+        <img id="modal-cover" class="modal-cover" src="" alt="" />
+        <div class="modal-header-info">
+          <div id="modal-genre-container" class="genre-badges-container"></div>
+          <div id="modal-title" class="modal-title"></div>
+          <div id="modal-cat" class="modal-meta"></div>
+          <div id="modal-date" class="modal-meta"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <a id="modal-external-link" href="#" target="_blank" rel="noopener noreferrer" class="external-btn">
+          Newtoneで開く ↗
+        </a>
+      </div>
+      <div class="track-list-title">TRACK LIST / SAMPLES</div>
+      <div id="modal-tracks-container"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
