@@ -13,11 +13,32 @@ let allRecords = [];
 let currentFilter = 'ALL';
 
 // ==========================================
-// 2. 日時・表示用フォーマット関数
+// 2. 日時・表示用フォーマット & ソート関数
 // ==========================================
 
 /**
- * リリース日付と初回取得時間から「YYYY-MM-DD (HH:mm更新)」の文字列を作る
+ * リリース日付（2026-09-03等）を最優先にし、同じ日付内では追加・更新時間順に並び替える
+ */
+function sortRecordsByReleaseDate(records) {
+  return records.sort((a, b) => {
+    // 1. release_date (例: "2026-09-03") の比較 (降順: 新しい順)
+    const dateA = a.release_date || "";
+    const dateB = b.release_date || "";
+
+    if (dateA !== dateB) {
+      return dateB.localeCompare(dateA);
+    }
+
+    // 2. release_date が同じ場合は created_at または scraped_at の時間で比較 (降順)
+    const timeA = new Date(a.created_at || a.scraped_at || 0).getTime();
+    const timeB = new Date(b.created_at || b.scraped_at || 0).getTime();
+
+    return timeB - timeA;
+  });
+}
+
+/**
+ * リリリース日付と初回取得時間から「YYYY-MM-DD (HH:mm更新)」の文字列を作る
  */
 function formatRecordDate(releaseDate, createdAtIso) {
   let timeStr = "";
@@ -30,6 +51,19 @@ function formatRecordDate(releaseDate, createdAtIso) {
   
   const baseDate = releaseDate || "日付不明";
   return `${baseDate}${timeStr}`;
+}
+
+/**
+ * レコードの最新 scraped_at（全体の最終更新日時）を取得する
+ */
+function getLatestScrapedTime(records) {
+  if (!records || records.length === 0) return new Date().getTime();
+  
+  const latestIso = records.reduce((max, r) => {
+    return (r.scraped_at > max) ? r.scraped_at : max;
+  }, records[0].scraped_at);
+
+  return new Date(latestIso).getTime();
 }
 
 /**
@@ -61,11 +95,13 @@ function updateHeaderLastUpdated(records) {
 async function fetchRecords(genre = 'ALL') {
   currentFilter = genre;
   
+  // release_date と created_at の組み合わせで並び替えを指定して取得
   let query = supabaseClient
     .from('records')
     .select('*')
-    .order('scraped_at', { ascending: false })
-    .limit(30);
+    .order('release_date', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(50);
 
   if (genre !== 'ALL') {
     query = query.contains('genres', [genre]);
@@ -78,7 +114,7 @@ async function fetchRecords(genre = 'ALL') {
     return;
   }
 
-  allRecords = data || [];
+  allRecords = sortRecordsByReleaseDate(data || []);
   renderRecords(allRecords);
   updateHeaderLastUpdated(allRecords);
 }
@@ -92,17 +128,26 @@ function renderRecords(records) {
     return;
   }
 
-  container.innerHTML = records.map(record => createRecordCard(record)).join('');
+  // Record Dig の最新更新時間を基準として取得
+  const latestScrapedTime = getLatestScrapedTime(allRecords);
+
+  container.innerHTML = records.map(record => createRecordCard(record, latestScrapedTime)).join('');
 }
 
-function createRecordCard(record) {
+function createRecordCard(record, latestScrapedTime) {
   const formattedMetaDate = formatRecordDate(record.release_date, record.created_at);
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
+
+  // 【24時間以内判定】
+  // Record Digの最新更新時間から、アイテムの追加時間(created_at)が24時間以内（86,400,000ミリ秒）か判定
+  const createdAtTime = new Date(record.created_at || record.scraped_at).getTime();
+  const isNew = (latestScrapedTime - createdAtTime) <= (24 * 60 * 60 * 1000);
 
   return `
     <div class="card ${record.is_sold_out ? 'sold-out' : ''}" onclick="openModal('${record.id}')">
       <div class="image-wrapper">
         <img src="${record.image_url}" alt="${record.title}" loading="lazy" />
+        ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         ${record.is_sold_out ? '<span class="soldout-badge">SOLD OUT</span>' : ''}
       </div>
       <div class="card-content">
