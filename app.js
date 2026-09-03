@@ -54,7 +54,7 @@ function formatRecordDate(releaseDate, createdAtIso) {
 }
 
 /**
- * レコードの最新 scraped_at（全体の最終更新日時）を取得する
+ * レコードの最新 scraped_at（全体の最終更新日時＝スクリプト実行時間）を取得する
  */
 function getLatestScrapedTime(records) {
   if (!records || records.length === 0) return new Date().getTime();
@@ -128,7 +128,7 @@ function renderRecords(records) {
     return;
   }
 
-  // Record Dig の最新更新時間を基準として取得
+  // Record Dig の最新更新時間を基準として取得（＝スクリプトを動かした時間）
   const latestScrapedTime = getLatestScrapedTime(allRecords);
 
   container.innerHTML = records.map(record => createRecordCard(record, latestScrapedTime)).join('');
@@ -138,10 +138,23 @@ function createRecordCard(record, latestScrapedTime) {
   const formattedMetaDate = formatRecordDate(record.release_date, record.created_at);
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
 
-  // 【24時間以内判定】
-  // Record Digの最新更新時間から、アイテムの追加時間(created_at)が24時間以内（86,400,000ミリ秒）か判定
-  const createdAtTime = new Date(record.created_at || record.scraped_at).getTime();
-  const isNew = (latestScrapedTime - createdAtTime) <= (24 * 60 * 60 * 1000);
+  // 【修正：24時間以内判定ロジック】
+  // レコードの日付データ（release_date優先、無ければcreated_at/scraped_at）を取得
+  let recordTime = null;
+  if (record.release_date) {
+    // "2026-08-31" などの日付文字列をミリ秒に変換
+    recordTime = new Date(record.release_date).getTime();
+  } else if (record.created_at || record.scraped_at) {
+    recordTime = new Date(record.created_at || record.scraped_at).getTime();
+  }
+
+  // スクリプト実行時間（latestScrapedTime）とレコード日付の差分を計算（ミリ秒）
+  let isNew = false;
+  if (recordTime) {
+    const diffInHours = (latestScrapedTime - recordTime) / (1000 * 60 * 60);
+    // 差分が 0時間以上 24時間以内（86,400秒）のものだけ NEW を表示
+    isNew = diffInHours >= 0 && diffInHours <= 24;
+  }
 
   return `
     <div class="card ${record.is_sold_out ? 'sold-out' : ''}" onclick="openModal('${record.id}')">
