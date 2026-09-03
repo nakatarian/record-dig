@@ -126,14 +126,17 @@ def scrape_and_update():
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
 
-    # 既存データの created_at を取得（初回更新日時の保持用）
-    existing_created_at_map = {}
+    # ★ 既存データの item_url と created_at を読み込み
+    existing_records = {}
+    is_first_run = False
     try:
         res = supabase.table("records").select("item_url, created_at").execute()
         if res.data:
-            existing_created_at_map = {r["item_url"]: r["created_at"] for r in res.data if r.get("created_at")}
+            existing_records = {r["item_url"].strip(): r.get("created_at") for r in res.data if r.get("item_url")}
+        else:
+            is_first_run = True  # DBが空の場合は初回実行と判定
     except Exception as e:
-        print(f"⚠️ 既存データの created_at 読み込み時にスキップ: {e}")
+        print(f"⚠️ 既存データの読み込み時にスキップ: {e}")
 
     for cat in CATEGORIES:
         try:
@@ -151,7 +154,7 @@ def scrape_and_update():
             href = a["href"]
             if any(k in href for k in ["/product/", "/item/", "item.php", "/physical/"]):
                 if "category" in href or "cart" in href or "wishlist" in href: continue
-                full_url = urljoin(cat["url"], href)
+                full_url = urljoin(cat["url"], href).strip()
                 parsed = urlparse(full_url)
                 item_id = parse_qs(parsed.query).get("id", [None])[0] or parsed.path.rstrip("/").split("/")[-1]
                 if item_id and item_id not in seen_ids:
@@ -171,7 +174,6 @@ def scrape_and_update():
                 for elem in detail_soup.find_all(string=True):
                     txt = elem.strip()
                     if txt.startswith("#"):
-                        # '#DEEP TECH HOUSE' -> 'deep tech house' に正規化
                         clean_tag = re.sub(r'\s+', ' ', txt.lstrip("#").strip().lower())
                         if clean_tag in GENRE_MAP and GENRE_MAP[clean_tag] not in detected_genres:
                             detected_genres.append(GENRE_MAP[clean_tag])
@@ -229,9 +231,9 @@ def scrape_and_update():
                     "scraped_at": current_time_iso
                 }
 
-                # 既存データがあれば過去の created_at を維持
-                if item_url in existing_created_at_map:
-                    record_data["created_at"] = existing_created_at_map[item_url]
+                # ★ 既存データがあれば過去の created_at を維持
+                if item_url in existing_records:
+                    record_data["created_at"] = existing_records[item_url]
                 else:
                     record_data["created_at"] = current_time_iso
 
@@ -243,8 +245,8 @@ def scrape_and_update():
     records_to_insert = list(records_map.values())
     if records_to_insert:
         try:
-            # 今回のスクレイピングで新規に追加されるレコード数を判定
-            new_items_count = sum(1 for r in records_to_insert if r["item_url"] not in existing_created_at_map)
+            # ★ DBに存在しない新規件数を正確にカウント
+            new_items_count = sum(1 for r in records_to_insert if r["item_url"] not in existing_records)
             
             # データベースへUpsert（更新・挿入）
             supabase.table("records").upsert(records_to_insert, on_conflict="item_url").execute()
@@ -253,9 +255,11 @@ def scrape_and_update():
             # 古いレコードを整理（最新30件を保持）
             cleanup_old_records(limit=30)
 
-            # 新規レコードが存在する場合のみ Discord 通知を送信
-            if new_items_count > 0:
+            # ★ 初回実行時ではなく、本当に新着が1件以上増えた時のみ Discord 通知を送信
+            if not is_first_run and new_items_count > 0:
                 send_discord_notification(new_items_count)
+            else:
+                print("ℹ️ 新着レコードがないため、Discord通知をスキップしました。")
 
         except Exception as e:
             print(f"  ❌ Supabaseエラー: {e}")
