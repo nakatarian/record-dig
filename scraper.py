@@ -139,6 +139,10 @@ def scrape_and_update():
         print(f"⚠️ 既存データの読み込み時にスキップ: {e}")
 
     for cat in CATEGORIES:
+        # ★ 全体で既に30件取得済みの場合はカテゴリ巡回を打ち切り
+        if len(records_map) >= 30:
+            break
+
         try:
             res = session.get(cat["url"], timeout=15)
             if res.status_code != 200: continue
@@ -161,8 +165,17 @@ def scrape_and_update():
                     seen_ids.add(item_id)
                     item_links.append((item_id, full_url))
 
+        # ★ 1カテゴリあたり必要な件数分（残枠）だけ切り出し
+        remaining_slots = 30 - len(records_map)
+        item_links = item_links[:remaining_slots]
+
         for local_rank, (item_id, item_url) in enumerate(item_links, 1):
             if item_id in records_map: continue
+            
+            # ★ 累計30件に達した時点で詳細ページの取得を停止
+            if len(records_map) >= 30:
+                break
+
             time.sleep(0.15)
             try:
                 detail_res = session.get(item_url, timeout=10)
