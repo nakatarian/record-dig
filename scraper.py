@@ -6,7 +6,7 @@ from supabase import create_client, Client
 import time
 import sys
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
 
 # ==========================================
 # 1. 設定情報（環境変数より取得）
@@ -107,16 +107,16 @@ def extract_track_list_tracks(detail_soup, item_url):
                         tracks.append({"title": text, "audio_url": full_audio})
     return tracks
 
-def cleanup_old_records(limit=30):
-    """ DB内の件数が上限を超えた場合、古いデータを削除する """
+def cleanup_old_records(days=7):
+    """ DB内のデータのうち、登録日時（created_at）が指定日数より古いものを自動削除する """
     try:
-        res = supabase.table("records").select("id, scraped_at").order("scraped_at", desc=True).execute()
-        all_records = res.data or []
-        
-        if len(all_records) > limit:
-            ids_to_delete = [r["id"] for r in all_records[limit:]]
-            supabase.table("records").delete().in_("id", ids_to_delete).execute()
-            print(f"🧹 古いデータ {len(ids_to_delete)} 件を削除し、最新{limit}件に整理しました。")
+        threshold_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        res = supabase.table("records").delete().lt("created_at", threshold_date).execute()
+        deleted_count = len(res.data) if res.data else 0
+        if deleted_count > 0:
+            print(f"🧹 保持期間（{days}日間）を超えた古いデータ {deleted_count} 件を自動削除しました。")
+        else:
+            print(f"🧹 保持期間オーバーのデータはありません。")
     except Exception as e:
         print(f"⚠️ データ自動クリーニングエラー: {e}")
 
@@ -129,6 +129,9 @@ def scrape_and_update():
     session.headers.update(HEADERS)
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
+
+    # 直近7日前の日付境界線（例: 本日が 2026-09-04 の場合 2026-08-28 以降を対象とする）
+    cutoff_date = date.today() - timedelta(days=7)
 
     # ★ 既存データの item_url と created_at を読み込み
     existing_records = {}
@@ -143,10 +146,7 @@ def scrape_and_update():
         print(f"⚠️ 既存データの読み込み時にスキップ: {e}")
 
     for cat in CATEGORIES:
-        # ★ 全体で既に30件取得済みの場合はカテゴリ巡回を打ち切り
-        if len(records_map) >= 30:
-            break
-
+        print(f"\n🔍 カテゴリ巡回開始: {cat['name']}")
         try:
             res = session.get(cat["url"], timeout=15)
             if res.status_code != 200: continue
@@ -169,22 +169,32 @@ def scrape_and_update():
                     seen_ids.add(item_id)
                     item_links.append((item_id, full_url))
 
-        # ★ 1カテゴリあたり必要な件数分（残枠）だけ切り出し
-        remaining_slots = 30 - len(records_map)
-        item_links = item_links[:remaining_slots]
-
-        for local_rank, (item_id, item_url) in enumerate(item_links, 1):
+        for item_id, item_url in item_links:
+            # すでに別カテゴリ経由で取得済みの場合はスキップ
             if item_id in records_map: continue
-            
-            # ★ 累計30件に達した時点で詳細ページの取得を停止
-            if len(records_map) >= 30:
-                break
 
             time.sleep(0.15)
             try:
                 detail_res = session.get(item_url, timeout=10)
                 if detail_res.status_code != 200: continue
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+                page_text = detail_soup.text
+
+                # ★ 日付チェック（例: 2026-09-01）
+                date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
+                release_date_str = None
+                if date_match:
+                    raw_date_str = date_match.group(0).replace('/', '-').replace('.', '-')
+                    try:
+                        item_date = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
+                        release_date_str = raw_date_str
+
+                        # 直近7日より古い日付に到達したら、このカテゴリの取得を切り上げて次のカテゴリへ移動
+                        if item_date < cutoff_date:
+                            print(f"  ⏹️ {item_date} のデータに達したため {cat['name']} の取得を終了し次へ移動します。")
+                            break
+                    except ValueError:
+                        pass
 
                 # ハッシュタグから対応ジャンルを検出
                 detected_genres = []
@@ -212,19 +222,14 @@ def scrape_and_update():
                     img_el = detail_soup.select_one(".item_img img, #item_img img, .item-image img, .main-img img, img[src*='/pic/'], img[src*='/product/']")
                     if img_el and img_el.get("src"): image_url = urljoin(item_url, img_el["src"])
 
-                # 型番・発売日
+                # 型番
                 cat_no = ""
-                release_date = None
-                page_text = detail_soup.text
                 cat_el = detail_soup.select_one("li.catno, .catno, .cat-no, .catalog, .code, .cat_no")
                 if cat_el: cat_no = cat_el.text.strip()
                 else:
                     cat_match = re.search(r'(?:Cat\s*No\.?:?\s*|型番\s*:\s*)([A-Z0-9_\-\s\/]+)', page_text, re.IGNORECASE)
                     if cat_match: cat_no = cat_match.group(1).strip()
                 cat_no = re.sub(r'^(?:Cat\s*No\.?:?\s*|型番\s*:\s*)', '', cat_no, flags=re.IGNORECASE).strip()
-
-                date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
-                if date_match: release_date = date_match.group(0).replace('/', '-').replace('.', '-')
 
                 # 在庫ステータス
                 page_text_upper = page_text.upper()
@@ -244,7 +249,7 @@ def scrape_and_update():
                     "genre": detected_genres[0],
                     "genres": detected_genres,
                     "is_sold_out": is_sold_out,
-                    "release_date": release_date,
+                    "release_date": release_date_str,
                     "scraped_at": current_time_iso
                 }
 
@@ -255,7 +260,7 @@ def scrape_and_update():
                     record_data["created_at"] = current_time_iso
 
                 records_map[item_id] = record_data
-                print(f"  ✓ [{detected_genres[0]}] {title} (Tracks: {len(tracks)})")
+                print(f"  ✓ [{detected_genres[0]}] ({release_date_str}) {title}")
             except Exception as e:
                 print(f"  ❌ エラー {item_url}: {e}")
 
@@ -270,10 +275,10 @@ def scrape_and_update():
             
             # データベースへUpsert（更新・挿入）
             supabase.table("records").upsert(records_to_insert, on_conflict="item_url").execute()
-            print(f"\n🎉 データベース書き込み完了！（通知対象の新規盤: {len(notifiable_titles)}件）")
+            print(f"\n🎉 データベース書き込み完了！（取得総数: {len(records_to_insert)}件）")
             
-            # 古いレコードを整理（最新30件を保持）
-            cleanup_old_records(limit=30)
+            # ★ 7日以上経過した古いレコードをDBから自動削除
+            cleanup_old_records(days=7)
 
             # ★ 初回実行時ではなく、在庫ありの新着が1件以上ある時のみタイトルリスト付きでDiscord通知
             if not is_first_run and len(notifiable_titles) > 0:
