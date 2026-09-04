@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 # 各スクレイパーをモジュールとして読み込み
 from scrapers.newtone import scrape_newtone
-from scrapers.freestyle import scrape_freestyle  # ★ 追加
+from scrapers.freestyle import scrape_freestyle
 
 SUPABASE_URL = "https://slnraznxgatrefbuawqy.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY")
@@ -67,22 +67,27 @@ def main():
     all_scraped_records.extend(newtone_records)
 
     # 2. TEQ TOKYO (後でここに追加)
-    # 3. FREESTYLE 実行  ★ 追加
+
+    # 3. FREESTYLE 実行
     freestyle_records = scrape_freestyle(existing_records)
     all_scraped_records.extend(freestyle_records)
 
     if all_scraped_records:
         try:
+            # 新規かつ在庫ありのレコード（通知対象）の抽出
             notifiable_records = [
                 r for r in all_scraped_records 
                 if r["item_url"] not in existing_records and not r["is_sold_out"]
             ]
             
+            # Supabase へ保存 (item_url をキーに更新/追加)
             supabase.table("records").upsert(all_scraped_records, on_conflict="item_url").execute()
             print(f"\n🎉 全サイトのデータベース書き込み完了！（取得総数: {len(all_scraped_records)}件）")
             
+            # クリーニングの実行
             cleanup_old_records(days=7)
 
+            # 通知処理
             if not is_first_run and len(notifiable_records) > 0:
                 send_discord_notification(notifiable_records)
             else:

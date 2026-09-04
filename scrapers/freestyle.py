@@ -223,12 +223,14 @@ def scrape_freestyle(existing_records_map):
     target_links = []
     seen_urls = set()
 
-    for a in soup.find_all("a", href=re.compile(r"item\.php", re.IGNORECASE)):
+    # ★ 修正箇所: item.php ではなく detail.php や code= を含む商品URLを取得
+    for a in soup.find_all("a", href=True):
         href = a["href"]
-        full_url = urljoin(FREESTYLE_ALL_URL, href).strip()
-        if full_url not in seen_urls:
-            seen_urls.add(full_url)
-            target_links.append(full_url)
+        if "detail.php" in href or "code=" in href:
+            full_url = urljoin(FREESTYLE_ALL_URL, href).strip()
+            if full_url not in seen_urls:
+                seen_urls.add(full_url)
+                target_links.append(full_url)
 
     print(f"  📦 1ページ目から抽出された商品リンク: {len(target_links)} 件")
 
