@@ -184,67 +184,74 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
 
 
 def scrape_freestyle(existing_records_map):
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    records_map = {}
-    
-    JST = timezone(timedelta(hours=9))
-    now_jst = datetime.now(JST)
-    today = now_jst.date()
-    cutoff_past_date = today - timedelta(days=7)
-
-    target_links = []
-    seen_urls = set()
-
-    # 1ページ目と2ページ目を順番に巡回してリンクを収集
-    for page in [1, 2]:
-        page_url = FREESTYLE_BASE_URL.format(page=page)
-        print(f"\n🔍 [FREESTYLE] {page}ページ目取得開始: {page_url}")
-        try:
-            res = session.get(page_url, timeout=30)
-            res.encoding = res.apparent_encoding or 'utf-8'
-            if res.status_code != 200:
-                print(f"  ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
-                continue
-        except Exception as e:
-            print(f"❌ [FREESTYLE] {page}ページ目 通信エラー: {e}")
-            continue
-
-        soup = BeautifulSoup(res.text, "html.parser")
-
-        page_links_count = 0
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if "detail.php" in href or "code=" in href:
-                full_url = urljoin(page_url, href).strip()
-                if full_url not in seen_urls:
-                    seen_urls.add(full_url)
-                    target_links.append(full_url)
-                    page_links_count += 1
-
-        print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
-
-    print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
-
-    # 並列で詳細ページを分析
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [
-            executor.submit(
-                fetch_and_parse_item, 
-                url, session, today, cutoff_past_date, now_jst, existing_records_map
-            ) 
-            for url in target_links
-        ]
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        records_map = {}
         
-        for future in as_completed(futures):
-            res = future.result()
-            if res:
-                item_id, record_data = res
-                records_map[item_id] = record_data
+        JST = timezone(timedelta(hours=9))
+        now_jst = datetime.now(JST)
+        today = now_jst.date()
+        cutoff_past_date = today - timedelta(days=7)
 
-    # 戻り値を整理する際、release_date -> scraped_at の順で降順（新しい順）にソート
-    results = list(records_map.values())
-    results.sort(
-        key=lambda x: (x.get("release_date") or "", x.get("scraped_at") or ""), 
-        reverse=True
-    )
+        target_links = []
+        seen_urls = set()
+
+        # 1ページ目と2ページ目を順番に巡回してリンクを収集
+        for page in [1, 2]:
+            page_url = FREESTYLE_BASE_URL.format(page=page)
+            print(f"\n🔍 [FREESTYLE] {page}ページ目取得開始: {page_url}")
+            try:
+                res = session.get(page_url, timeout=30)
+                res.encoding = res.apparent_encoding or 'utf-8'
+                if res.status_code != 200:
+                    print(f"  ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
+                    continue
+            except Exception as e:
+                print(f"❌ [FREESTYLE] {page}ページ目 通信エラー: {e}")
+                continue
+
+            soup = BeautifulSoup(res.text, "html.parser")
+
+            page_links_count = 0
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "detail.php" in href or "code=" in href:
+                    full_url = urljoin(page_url, href).strip()
+                    if full_url not in seen_urls:
+                        seen_urls.add(full_url)
+                        target_links.append(full_url)
+                        page_links_count += 1
+
+            print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
+
+        print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
+
+        # 並列で詳細ページを分析
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(
+                    fetch_and_parse_item, 
+                    url, session, today, cutoff_past_date, now_jst, existing_records_map
+                ) 
+                for url in target_links
+            ]
+            
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    item_id, record_data = res
+                    records_map[item_id] = record_data
+
+        # 戻り値を整理する際、release_date -> scraped_at の順で降順（新しい順）にソート
+        results = list(records_map.values())
+        results.sort(
+            key=lambda x: (x.get("release_date") or "", x.get("scraped_at") or ""), 
+            reverse=True
+        )
+
+        return results
+
+    except Exception as e:
+        print(f"❌ [FREESTYLE] 全体処理中に予期せぬエラーが発生しました: {e}")
+        return []  # エラー発生時も None ではなく空配列を返して TypeError を回避
