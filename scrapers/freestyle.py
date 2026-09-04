@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta, date
 
 FREESTYLE_ALL_URL = "https://freestyleonline.net/list.php?GENRE=ALL"
 
-# ② 指定タグの変換マッピング
+# 指定タグの変換マッピング
 TAG_MAP = {
     "techhouse": "Tech House",
     "minimal": "Minimal",
@@ -23,9 +23,11 @@ def scrape_freestyle(existing_records_map):
     session = requests.Session()
     session.headers.update(HEADERS)
     records_map = {}
-    current_time_iso = datetime.now(timezone.utc).isoformat()
     
-    today = date.today()
+    # 日本時間 (JST)
+    JST = timezone(timedelta(hours=9))
+    now_jst = datetime.now(JST)
+    today = now_jst.date()
     cutoff_past_date = today - timedelta(days=7)
 
     print(f"\n🔍 [FREESTYLE] 一覧ページ取得開始: {FREESTYLE_ALL_URL}")
@@ -65,7 +67,7 @@ def scrape_freestyle(existing_records_map):
             page_text = detail_soup.text
 
             # --------------------------------------------------
-            # ② 該当タグ（複数対応・大文字小文字無視）の抽出
+            # タグの抽出（大文字小文字区別なし）
             # --------------------------------------------------
             detected_genres = []
             tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text, re.IGNORECASE)
@@ -78,12 +80,12 @@ def scrape_freestyle(existing_records_map):
                 continue
 
             # --------------------------------------------------
-            # ① 日付の精緻な抽出
+            # 日付の分離処理
+            # 1. update_datetime: 純粋な「更新日時」（ソート・表示・NEW判定専用）
+            # 2. upcoming_arrival_date: 「入荷予定日」（画面バッジ表示専用）
             # --------------------------------------------------
-            release_date_str = None
-            update_date = None
-            arrival_date = None
-            is_rearrival = False
+            update_datetime = None
+            upcoming_arrival_date = None
 
             for tr in detail_soup.find_all("tr"):
                 tr_text = tr.text.strip()
@@ -94,33 +96,37 @@ def scrape_freestyle(existing_records_map):
                     try:
                         d_obj = datetime.strptime(found_date_str, "%Y-%m-%d").date()
                         
+                        # 時刻(HH:MM)の抽出
+                        time_match = re.search(r'(\d{1,2}):(\d{2})', tr_text)
+                        if time_match:
+                            hh, mm = map(int, time_match.groups())
+                            dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, hh, mm, tzinfo=JST)
+                        else:
+                            dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, 0, 0, tzinfo=JST)
+
+                        # 「入荷予定」はバッジ表示用の変数に設定（ソート用のupdate_datetimeには影響させない）
                         if "入荷予定" in tr_text:
-                            arrival_date = d_obj
-                        elif "更新日" in tr_text:
-                            update_date = d_obj
-                            if "[再入荷]" in tr_text:
-                                is_rearrival = True
+                            if d_obj > today:
+                                upcoming_arrival_date = d_obj.strftime("%Y-%m-%d")
+                        
+                        # 「更新日」または「更新」をソート基準の更新日時として採用
+                        if "更新日" in tr_text or "更新" in tr_text:
+                            update_datetime = dt_obj
+
                     except ValueError:
                         pass
 
-            chosen_date = None
-            if arrival_date and arrival_date >= today:
-                chosen_date = arrival_date
-            elif is_rearrival and update_date:
-                chosen_date = update_date
-            else:
-                valid_dates = [d for d in [update_date, arrival_date] if d is not None]
-                if valid_dates:
-                    chosen_date = max(valid_dates)
+            # 「更新日」がページから取得できなかった場合のフォールバック
+            if not update_datetime:
+                update_datetime = now_jst
 
-            if chosen_date:
-                release_date_str = chosen_date.strftime("%Y-%m-%d")
-                if chosen_date < cutoff_past_date:
-                    print(f"  ⏹️ {release_date_str} のためスキップ（7日以上前の過去データ）")
-                    continue
+            # 7日以上前の過去データはスキップ
+            if update_datetime.date() < cutoff_past_date:
+                print(f"  ⏹️ {update_datetime.strftime('%Y-%m-%d')} のためスキップ（7日以上前）")
+                continue
 
             # --------------------------------------------------
-            # タイトル・キャットナンバーの取得
+            # タイトル・キャットナンバー
             # --------------------------------------------------
             title = ""
             title_el = detail_soup.select_one("h1, h2, .item_title, font[size='+1']")
@@ -135,29 +141,27 @@ def scrape_freestyle(existing_records_map):
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
             # --------------------------------------------------
-            # 画像URLの取得
+            # 画像URL
             # --------------------------------------------------
             image_url = ""
             for img in detail_soup.find_all("img"):
                 src = img.get("src", "")
                 if not src: continue
-                
                 src_lower = src.lower()
                 if any(x in src_lower for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "twitter", "facebook", "listen_b.gif"]):
                     continue
-                
                 if any(x in src_lower for x in ["/listen/img/", "/photo/", "/item/", "disco", ".jpg", ".jpeg", ".png"]):
                     image_url = urljoin(item_url, src)
                     break
 
             # --------------------------------------------------
-            # 在庫状態の判定
+            # 在庫状態
             # --------------------------------------------------
             page_text_upper = page_text.upper()
             is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
             # --------------------------------------------------
-            # 音声ファイル (.mp3) の抽出
+            # 音声 & トラックリスト
             # --------------------------------------------------
             audio_url = ""
             listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
@@ -173,32 +177,28 @@ def scrape_freestyle(existing_records_map):
                     filename = audio_match.group(1)
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
-            # --------------------------------------------------
-            # トラックリストの取得（修正点：1曲ずつ個別オブジェクトとして格納）
-            # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
-
             track_td = detail_soup.find("td", attrs={"colspan": "2"})
             if track_td:
                 lines = track_td.get_text(separator="\n").splitlines()
                 for line in lines:
                     clean_line = line.strip()
-                    # A1:, A2:, B1: などの行頭パターンにマッチするか確認
                     if re.match(r'^[A-D][1-9]\s*:', clean_line):
                         parsed_track_lines.append(clean_line)
 
-            # 1曲ごとに音源URLを紐付けて配列（リスト）に追加
             if parsed_track_lines:
                 for line in parsed_track_lines:
                     tracks.append({"title": line, "audio_url": audio_url})
             else:
-                # 特定パターンが見つからない場合のバックアップ
                 tracks.append({"title": title, "audio_url": audio_url})
 
             # --------------------------------------------------
             # データの組み立て
             # --------------------------------------------------
+            updated_at_iso = update_datetime.isoformat()
+            updated_display_str = f"{update_datetime.strftime('%Y-%m-%d')} ({update_datetime.strftime('%H:%M')}更新)"
+
             record_data = {
                 "site": "freestyle",
                 "item_url": item_url,
@@ -210,34 +210,39 @@ def scrape_freestyle(existing_records_map):
                 "genre": detected_genres[0],
                 "genres": detected_genres,
                 "is_sold_out": is_sold_out,
-                "release_date": release_date_str,
-                "scraped_at": current_time_iso
+                "upcoming_arrival_date": upcoming_arrival_date, # バッジ表示専用 (ソートには無関係)
+                "updated_at": updated_at_iso,                  # 純粋な更新日時 (ソート＆NEW判定用)
+                "updated_display": updated_display_str,        # カード下部表示用
+                "scraped_at": now_jst.isoformat()
             }
 
             if item_url in existing_records_map:
-                record_data["created_at"] = existing_records_map[item_url]
+                record_data["created_at"] = existing_records_map[item_url].get("created_at", now_jst.isoformat())
             else:
-                record_data["created_at"] = current_time_iso
+                record_data["created_at"] = now_jst.isoformat()
 
             item_id = item_url.split("=")[-1] if "=" in item_url else item_url
             records_map[item_id] = record_data
             
             genres_label = ", ".join(detected_genres)
-            print(f"  ✓ [FREESTYLE] [{genres_label}] ({release_date_str}) {title}")
+            print(f"  ✓ [FREESTYLE] [{genres_label}] ({updated_display_str}) {title}")
 
         except Exception as e:
             print(f"  ❌ エラー {item_url}: {e}")
 
-    return list(records_map.values())
+    # --------------------------------------------------
+    # 「更新日時 (updated_at)」の新しい順（降順）のみでソートして返却
+    # --------------------------------------------------
+    results = list(records_map.values())
+    results.sort(key=lambda x: x["updated_at"], reverse=True)
+
+    return results
 
 if __name__ == "__main__":
     print("🚀 Freestyle 単体テスト実行開始...")
     test_results = scrape_freestyle({})
     print(f"\n✅ 取得完了: 計 {len(test_results)} 件")
     for r in test_results:
-        print(f"・ジャンル: {r['genres']} | タイトル: {r['title']} | 日付: {r['release_date']}")
-        print(f"  画像: {r['image_url']}")
-        print(f"  トラック数: {len(r['tracks'])}")
-        for idx, t in enumerate(r['tracks'], 1):
-            print(f"    [{idx}] {t['title']}")
-        print()
+        print(f"・更新日時: {r['updated_display']} | タイトル: {r['title']}")
+        if r['upcoming_arrival_date']:
+            print(f"  └ 🏷️ バッジ用入荷予定日: {r['upcoming_arrival_date']}")
