@@ -24,8 +24,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 supabase
 
-      - name: Run Scraper
+      -  name: Run scraper
         env:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python scraper.py
+        run: |
+          python main.py  # ★ ここを main.py に変更！

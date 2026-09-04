@@ -2,28 +2,9 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, parse_qs, urlparse
-from supabase import create_client, Client
 import time
-import sys
 import re
 from datetime import datetime, timezone, timedelta, date
-
-# ==========================================
-# 1. 設定情報（環境変数より取得）
-# ==========================================
-SUPABASE_URL = "https://slnraznxgatrefbuawqy.supabase.co"
-SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY")
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-
-if not SUPABASE_KEY:
-    print("❌ エラー: SUPABASE_SECRET_KEY が環境変数に設定されていません。")
-    sys.exit(1)
-
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"❌ [Supabase初期化エラー] {e}")
-    sys.exit(1)
 
 CATEGORIES = [
     {"name": "Deep House", "url": "https://www.newtone-records.com/store/deephouse/"},
@@ -45,7 +26,6 @@ VINYL_FORMAT_KEYWORDS = [
     "lp", "2lp", "3lp", "vinyl", "ep", "flexi"
 ]
 
-# 海外サーバー/クラウドIPブロックを回避するためのリアルなブラウザヘッダー
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -55,7 +35,6 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1"
 }
 
-# リトライ付き通信用関数
 def fetch_url(session, url, retries=3, timeout=30):
     for i in range(retries):
         try:
@@ -67,26 +46,6 @@ def fetch_url(session, url, retries=3, timeout=30):
                 raise e
             time.sleep(2)
     return None
-
-# ==========================================
-# 2. 通知・補助関数
-# ==========================================
-
-def send_discord_notification(new_titles):
-    if not DISCORD_WEBHOOK_URL:
-        print("⚠️ DISCORD_WEBHOOK_URL が設定されていないため通知をスキップします。")
-        return
-
-    count = len(new_titles)
-    titles_str = "\n".join([f"・{t}" for t in new_titles])
-    message = f"🎵 **【NEWTONE】新着レコードが {count} 件追加されました！（在庫あり）**\n\n{titles_str}"
-
-    try:
-        res = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=10)
-        if res.status_code in [200, 204]:
-            print(f"📲 Discord通知を送信しました: NEWTONEに新着レコード {count} 件追加")
-    except Exception as e:
-        print(f"❌ Discord通知エラー: {e}")
 
 def clean_audio_url(file_src, base_url):
     if not file_src: return ""
@@ -116,47 +75,22 @@ def extract_track_list_tracks(detail_soup, item_url):
                         tracks.append({"title": text, "audio_url": full_audio})
     return tracks
 
-def cleanup_old_records(days=7):
-    try:
-        threshold_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        res = supabase.table("records").delete().lt("created_at", threshold_date).execute()
-        deleted_count = len(res.data) if res.data else 0
-        if deleted_count > 0:
-            print(f"🧹 保持期間（{days}日間）を超えた古いデータ {deleted_count} 件を自動削除しました。")
-    except Exception as e:
-        print(f"⚠️ データ自動クリーニングエラー: {e}")
-
-# ==========================================
-# 3. メイン処理（スクレイピング & DB更新）
-# ==========================================
-
-def scrape_and_update():
+def scrape_newtone(existing_records_map):
     session = requests.Session()
     session.headers.update(HEADERS)
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
     cutoff_date = date.today() - timedelta(days=7)
 
-    existing_records = {}
-    is_first_run = False
-    try:
-        res = supabase.table("records").select("item_url, created_at").execute()
-        if res.data:
-            existing_records = {r["item_url"].strip(): r.get("created_at") for r in res.data if r.get("item_url")}
-        else:
-            is_first_run = True
-    except Exception as e:
-        print(f"⚠️ 既存データの読み込み時にスキップ: {e}")
-
     for cat in CATEGORIES:
-        print(f"\n🔍 カテゴリ巡回開始: {cat['name']}")
+        print(f"\n🔍 [NEWTONE] カテゴリ巡回開始: {cat['name']}")
         try:
             res = fetch_url(session, cat["url"], retries=3, timeout=30)
             if not res or res.status_code != 200: 
                 print(f"  ⚠️ アクセス失敗のためスキップ")
                 continue
         except Exception as e:
-            print(f"❌ カテゴリページの取得エラー ({cat['name']}): {e}")
+            print(f"❌ [NEWTONE] カテゴリページの取得エラー ({cat['name']}): {e}")
             continue
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -190,7 +124,6 @@ def scrape_and_update():
                 if not title and detail_soup.title: title = detail_soup.title.text.strip()
                 if title: title = re.sub(r'\s*\|\s*NEWTONE\s*RECORDS.*$', '', title, flags=re.IGNORECASE).strip()
 
-                # ★ デジタル単体盤スキップ（安全対策付き）
                 tab_lis = detail_soup.select("ul.tab-list li[tab]")
                 available_formats = [li.get("tab", "").strip().lower() for li in tab_lis if li.get("tab")]
 
@@ -205,7 +138,6 @@ def scrape_and_update():
                     print(f"  ⏭️ スキップ (Digital単体盤): {title}")
                     continue
 
-                # 日付チェック
                 date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
                 release_date_str = None
                 if date_match:
@@ -251,6 +183,7 @@ def scrape_and_update():
                 audio_url = tracks[0]["audio_url"] if tracks else ""
 
                 record_data = {
+                    "site": "newtone",  # ★ NEWTONE用のサイト識別タグ
                     "item_url": item_url,
                     "title": title,
                     "cat_no": cat_no,
@@ -264,8 +197,8 @@ def scrape_and_update():
                     "scraped_at": current_time_iso
                 }
 
-                if item_url in existing_records:
-                    record_data["created_at"] = existing_records[item_url]
+                if item_url in existing_records_map:
+                    record_data["created_at"] = existing_records_map[item_url]
                 else:
                     record_data["created_at"] = current_time_iso
 
@@ -274,26 +207,4 @@ def scrape_and_update():
             except Exception as e:
                 print(f"  ❌ エラー {item_url}: {e}")
 
-    records_to_insert = list(records_map.values())
-    if records_to_insert:
-        try:
-            notifiable_titles = [
-                r["title"] for r in records_to_insert 
-                if r["item_url"] not in existing_records and not r["is_sold_out"]
-            ]
-            
-            supabase.table("records").upsert(records_to_insert, on_conflict="item_url").execute()
-            print(f"\n🎉 データベース書き込み完了！（取得総数: {len(records_to_insert)}件）")
-            
-            cleanup_old_records(days=7)
-
-            if not is_first_run and len(notifiable_titles) > 0:
-                send_discord_notification(notifiable_titles)
-            else:
-                print("ℹ️ 在庫ありの新規追加盤がないため、Discord通知をスキップしました。")
-
-        except Exception as e:
-            print(f"  ❌ Supabaseエラー: {e}")
-
-if __name__ == "__main__":
-    scrape_and_update()
+    return list(records_map.values())
