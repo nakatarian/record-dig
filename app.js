@@ -11,18 +11,14 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // グローバル変数
 let allRecords = [];
 let currentGenreFilter = 'ALL';
-let currentSiteFilter = 'newtone'; // ★ 初期表示を Newtone に設定
+let currentSiteFilter = 'newtone'; // 初期表示は Newtone
 
 // ==========================================
 // 2. 日時・表示用フォーマット & ソート関数
 // ==========================================
 
-/**
- * リリース日付（2026-09-03等）を最優先にし、同じ日付内では追加・更新時間順に並び替える
- */
 function sortRecordsByReleaseDate(records) {
   return records.sort((a, b) => {
-    // 1. release_date (例: "2026-09-03") の比較 (降順: 新しい順)
     const dateA = a.release_date || "";
     const dateB = b.release_date || "";
 
@@ -30,7 +26,6 @@ function sortRecordsByReleaseDate(records) {
       return dateB.localeCompare(dateA);
     }
 
-    // 2. release_date が同じ場合は created_at または scraped_at の時間で比較 (降順)
     const timeA = new Date(a.created_at || a.scraped_at || 0).getTime();
     const timeB = new Date(b.created_at || b.scraped_at || 0).getTime();
 
@@ -38,9 +33,6 @@ function sortRecordsByReleaseDate(records) {
   });
 }
 
-/**
- * リリリース日付と初回取得時間から「YYYY-MM-DD (HH:mm更新)」の文字列を作る
- */
 function formatRecordDate(releaseDate, createdAtIso) {
   let timeStr = "";
   if (createdAtIso) {
@@ -54,9 +46,6 @@ function formatRecordDate(releaseDate, createdAtIso) {
   return `${baseDate}${timeStr}`;
 }
 
-/**
- * レコードの最新 scraped_at（全体の最終更新日時＝スクリプト実行時間）を取得する
- */
 function getLatestScrapedTime(records) {
   if (!records || records.length === 0) return new Date().getTime();
   
@@ -67,9 +56,6 @@ function getLatestScrapedTime(records) {
   return new Date(latestIso).getTime();
 }
 
-/**
- * 画面右上の最終更新日時（最新の scraped_at）を更新表示する
- */
 function updateHeaderLastUpdated(records) {
   const updatedEl = document.getElementById('last-updated-text');
   if (!updatedEl || !records || records.length === 0) return;
@@ -94,7 +80,6 @@ function updateHeaderLastUpdated(records) {
 // ==========================================
 
 async function fetchRecords() {
-  // DBからは全体（またはジャンル条件に合うもの）をまとめて取得
   let query = supabaseClient
     .from('records')
     .select('*')
@@ -114,9 +99,6 @@ async function fetchRecords() {
   updateHeaderLastUpdated(allRecords);
 }
 
-/**
- * ジャンル & サイトの組み合わせフィルターを適用して描画
- */
 function applyFiltersAndRender() {
   let filtered = [...allRecords];
 
@@ -128,7 +110,7 @@ function applyFiltersAndRender() {
     });
   }
 
-  // 2. サイトフィルター（newtone / technoblue / freestyle 等）
+  // 2. サイトフィルター
   if (currentSiteFilter !== 'ALL') {
     filtered = filtered.filter(r => (r.site || '').toLowerCase() === currentSiteFilter.toLowerCase());
   }
@@ -168,26 +150,17 @@ function createRecordCard(record, latestScrapedTime) {
     recordTime = new Date(record.release_date).getTime();
   }
 
+  // 24時間以内の新着判定
   let isNew = false;
   if (recordTime) {
     const diffInHours = (latestScrapedTime - recordTime) / (1000 * 60 * 60);
     isNew = diffInHours >= 0 && diffInHours <= 24;
   }
 
-  // サイト名のショートカット表示（バッジ用）
-  const siteBadgeMap = {
-    'newtone': 'N',
-    'technoblue': 'T',
-    'freestyle': 'F'
-  };
-  const siteKey = (record.site || '').toLowerCase();
-  const siteLabel = siteBadgeMap[siteKey] || (record.site ? record.site.toUpperCase() : '');
-
   return `
     <div class="card ${record.is_sold_out ? 'sold-out' : ''}" onclick="openModal('${record.id}')">
       <div class="image-wrapper">
         <img src="${record.image_url}" alt="${record.title}" loading="lazy" />
-        ${siteLabel ? `<span class="site-badge site-${siteKey}">${siteLabel}</span>` : ''}
         ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         ${record.is_sold_out ? '<span class="soldout-badge">SOLD OUT</span>' : ''}
       </div>
@@ -206,13 +179,10 @@ function createRecordCard(record, latestScrapedTime) {
 // 4. フィルター切替処理
 // ==========================================
 
-/**
- * ジャンルフィルター切替
- */
 function filterGenre(genre, btnElement) {
   currentGenreFilter = genre;
   
-  const buttons = document.querySelectorAll('.genre-filter-btn, .filter-btn');
+  const buttons = document.querySelectorAll('.category-filter .filter-btn');
   buttons.forEach(btn => btn.classList.remove('active'));
   if (btnElement) {
     btnElement.classList.add('active');
@@ -221,13 +191,10 @@ function filterGenre(genre, btnElement) {
   applyFiltersAndRender();
 }
 
-/**
- * サイトフィルター切替 (newtone / technoblue / freestyle)
- */
 function filterSite(siteName, btnElement) {
   currentSiteFilter = siteName;
 
-  const buttons = document.querySelectorAll('.site-filter-btn');
+  const buttons = document.querySelectorAll('.site-filter .site-filter-btn');
   buttons.forEach(btn => btn.classList.remove('active'));
   if (btnElement) {
     btnElement.classList.add('active');

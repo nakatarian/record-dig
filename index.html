@@ -16,8 +16,8 @@
       --card-hover: #22262e;
       --text-main: #f0f2f5;
       --text-sub: #8c96a5;
-      --accent-site: #2563eb;   /* サイトボタン用アクセント色 (青) */
-      --accent-genre: #10b981;  /* ジャンルボタン用アクセント色 (エメラルドグリーン) */
+      --accent-site: #10b981;   /* サイトボタン用 (エメラルドグリーン) */
+      --accent-genre: #2563eb;  /* ジャンルボタン用 (ブルー) */
       --badge-bg: #1e293b;
       --badge-text: #60a5fa;
       --modal-bg: #161920;
@@ -79,7 +79,7 @@
       display: none;
     }
 
-    /* ★ サイト切替ボタン (1行目: 角丸長方形) ★ */
+    /* ★ サイト切替ボタン (1行目: 角丸長方形 & グリーン) ★ */
     .site-filter-btn {
       flex: 1;
       min-width: max-content;
@@ -97,12 +97,13 @@
     }
     .site-filter-btn.active {
       background-color: var(--accent-site);
-      color: #fff;
+      color: #0f1115;
       border-color: var(--accent-site);
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+      font-weight: 900;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
     }
 
-    /* ★ ジャンル切替ボタン (2行目: 完全に丸いバッジ型 & グリーン系) ★ */
+    /* ★ ジャンル切替ボタン (2行目: 完全丸型 & ブルー) ★ */
     .filter-btn {
       flex: 1;
       min-width: max-content;
@@ -111,7 +112,7 @@
       color: var(--text-sub);
       border: 1px solid rgba(255, 255, 255, 0.05);
       padding: 6px 14px;
-      border-radius: 20px; /* 完全な丸型 */
+      border-radius: 20px;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.3px;
@@ -121,10 +122,10 @@
     }
     .filter-btn.active {
       background-color: var(--accent-genre);
-      color: #0f1115; /* テキストを濃くして視認性確保 */
+      color: #fff;
       border-color: var(--accent-genre);
       font-weight: 800;
-      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
     }
 
     /* レコードカード一覧 */
@@ -165,45 +166,24 @@
       object-fit: cover;
     }
 
-    /* サイト識別バッジ（左上） */
-    .site-badge {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      background-color: rgba(15, 17, 21, 0.85);
-      color: #fff;
-      font-size: 10px;
-      font-weight: 800;
-      width: 24px;
-      height: 24px;
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(4px);
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-      z-index: 2;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    /* NEW バッジ */
+    /* ★ NEW バッジ（左上に配置・完全丸型） ★ */
     .new-badge {
       position: absolute;
       top: 8px;
-      left: 38px;
+      left: 8px;
       background-color: #ffffff;
       color: #000000;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 900;
-      width: 32px;
-      height: 24px;
-      border-radius: 12px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
       z-index: 2;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.3px;
     }
 
     .soldout-badge {
@@ -223,7 +203,7 @@
       gap: 6px;
     }
 
-    /* 複数ジャンル用コンテナ & カプセル型タグデザイン */
+    /* ジャンルバッジ（青色系） */
     .genre-badges-container {
       display: flex;
       flex-wrap: wrap;
@@ -232,9 +212,9 @@
     }
     .genre-badge {
       display: inline-block;
-      background-color: rgba(16, 185, 129, 0.15);
-      color: #34d399;
-      border: 1px solid rgba(52, 211, 153, 0.25);
+      background-color: rgba(30, 64, 175, 0.35);
+      color: #60a5fa;
+      border: 1px solid rgba(96, 165, 250, 0.25);
       font-size: 9px;
       font-weight: 700;
       padding: 2px 6px;
@@ -379,14 +359,14 @@
     </div>
 
     <div class="filter-container">
-      <!-- ★ 1行目: サイト切り替え (Nを初期アクティブに設定) ★ -->
+      <!-- 1行目: サイト切り替え (Nを初期選択) -->
       <div class="site-filter">
         <button class="site-filter-btn active" onclick="filterSite('newtone', this)">N</button>
         <button class="site-filter-btn" onclick="filterSite('technoblue', this)">T</button>
         <button class="site-filter-btn" onclick="filterSite('freestyle', this)">F</button>
       </div>
 
-      <!-- ★ 2行目: ジャンル切り替え (ALL GENRES → ALL に変更 & 丸型) ★ -->
+      <!-- 2行目: ジャンル切り替え -->
       <div class="category-filter">
         <button class="filter-btn active" onclick="filterGenre('ALL', this)">ALL</button>
         <button class="filter-btn" onclick="filterGenre('Tech House', this)">TECH HOUSE</button>
