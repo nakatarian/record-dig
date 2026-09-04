@@ -25,9 +25,9 @@ def scrape_freestyle(existing_records_map):
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
     
-    # 本日の日付
+    # 本日の日付と判定ライン（7日前）
     today = date.today()
-    cutoff_past_date = today - timedelta(days=7) # 過去1週間（7日前）
+    cutoff_past_date = today - timedelta(days=7)
 
     print(f"\n🔍 [FREESTYLE] 一覧ページ取得開始: {FREESTYLE_ALL_URL}")
     try:
@@ -80,40 +80,59 @@ def scrape_freestyle(existing_records_map):
                 continue
 
             # --------------------------------------------------
-            # ① 日付の抽出・判定（入荷予定日を優先、なければ更新日）
+            # ① 日付の精緻な抽出（未来の入荷予定日 ＞ 再入荷更新日 ＞ 最新日付）
             # --------------------------------------------------
             release_date_str = None
-            
-            # 「入荷予定日」の行を優先検索
-            arrival_match = re.search(r'入荷予定日\s*(20\d{2}[./-]\d{2}[./-]\d{2})', page_text)
-            update_match = re.search(r'更新日\s*(20\d{2}[./-]\d{2}[./-]\d{2})', page_text)
-            
-            target_date_raw = None
-            if arrival_match:
-                target_date_raw = arrival_match.group(1)
-            elif update_match:
-                target_date_raw = update_match.group(1)
-            else:
-                # パターンが見つからない場合はページ全体の最初のyyy.mm.ddを取得
-                dates = re.findall(r'20\d{2}[./-]\d{2}[./-]\d{2}', page_text)
-                if dates:
-                    target_date_raw = dates[0]
+            update_date = None
+            arrival_date = None
+            is_rearrival = False
 
-            if target_date_raw:
-                raw_date_str = target_date_raw.replace('.', '-').replace('/', '-')
-                try:
-                    item_date = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
-                    release_date_str = raw_date_str
-                    
-                    # 過去データかつ7日より古い場合はスキップ
-                    if item_date < today and item_date < cutoff_past_date:
-                        print(f"  ⏹️ {item_date} のためスキップ（7日以上前の過去データ）")
-                        continue
-                except ValueError:
-                    pass
+            # テーブル行（tr）単位でラベルと日付をマッピング解析
+            for tr in detail_soup.find_all("tr"):
+                tr_text = tr.text.strip()
+                date_match = re.search(r'20\d{2}[./-]\d{2}[./-]\d{2}', tr_text)
+                
+                if date_match:
+                    found_date_str = date_match.group(0).replace('.', '-').replace('/', '-')
+                    try:
+                        d_obj = datetime.strptime(found_date_str, "%Y-%m-%d").date()
+                        
+                        if "入荷予定" in tr_text:
+                            arrival_date = d_obj
+                        elif "更新日" in tr_text:
+                            update_date = d_obj
+                            if "[再入荷]" in tr_text:
+                                is_rearrival = True
+                    except ValueError:
+                        pass
+
+            # --- 日付決定ロジック ---
+            chosen_date = None
+
+            # 1. 「入荷予定日」が存在し、かつ「今日以降（未来）」なら先行予約日として最優先
+            if arrival_date and arrival_date >= today:
+                chosen_date = arrival_date
+            
+            # 2. 「[再入荷]」ラベル付きの更新日ならそれを採用
+            elif is_rearrival and update_date:
+                chosen_date = update_date
+                
+            # 3. それ以外は「更新日」と「入荷予定日」の中で最も新しい（日付が大きい）方を採用
+            else:
+                valid_dates = [d for d in [update_date, arrival_date] if d is not None]
+                if valid_dates:
+                    chosen_date = max(valid_dates)
+
+            # 日付の決定と過去データ（7日以上前）のフィルタリング
+            if chosen_date:
+                release_date_str = chosen_date.strftime("%Y-%m-%d")
+                
+                if chosen_date < cutoff_past_date:
+                    print(f"  ⏹️ {release_date_str} のためスキップ（7日以上前の過去データ）")
+                    continue
 
             # --------------------------------------------------
-            # タイトル・キャットナンバー・画像の取得
+            # タイトル・キャットナンバーの取得
             # --------------------------------------------------
             title = ""
             title_el = detail_soup.select_one("h1, h2, .item_title, font[size='+1']")
@@ -127,7 +146,9 @@ def scrape_freestyle(existing_records_map):
             if cat_match:
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
-            # --- 画像URLの取得（完全パス化） ---
+            # --------------------------------------------------
+            # 画像URLの取得（/listen/img/ や相対パスを完全絶対パス化）
+            # --------------------------------------------------
             image_url = ""
             img_el = detail_soup.select_one("img[src*='listen/img/'], img[src*='img/']")
             if img_el and img_el.get("src"):
@@ -140,7 +161,7 @@ def scrape_freestyle(existing_records_map):
             is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
             # --------------------------------------------------
-            # ③ 音声ファイル (.mp3) の抽出（OPENLISTENから直接取得）
+            # ③ 音声ファイル (.mp3) の抽出
             # --------------------------------------------------
             audio_url = ""
             listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
@@ -150,7 +171,6 @@ def scrape_freestyle(existing_records_map):
                 if m:
                     audio_url = urljoin(item_url, m.group(1))
 
-            # バックアップ: OPENLISTENから取れない場合は正規表現で.mp3を探す
             if not audio_url:
                 audio_match = re.search(r"([a-zA-Z0-9_\-]+\.mp3)", page_text)
                 if audio_match:
@@ -158,18 +178,19 @@ def scrape_freestyle(existing_records_map):
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
             # --------------------------------------------------
-            # トラックリスト（行ごと・接頭辞不問）の取得
+            # トラックリストのピンポイント取得（余計な注意事項の排除）
             # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
 
-            # トラックリストが記載される <td> (colspan="2") を特定して取得
-            track_td = detail_soup.find("td", attrs={"colspan": "2"})
-            if track_td:
-                for line in track_td.get_text(separator="\n").splitlines():
+            # 曲名が入っている <span class="txt_label"> を直接ターゲットにする
+            label_span = detail_soup.select_one("td[colspan='2'] span.txt_label")
+            
+            if label_span:
+                for line in label_span.get_text(separator="\n").splitlines():
                     clean_line = line.strip()
-                    # 雑多な文字列・価格表記・ボタンテキストを除外して曲名行のみ抽出
-                    if clean_line and not clean_line.endswith("yen") and "Listen" not in clean_line and not clean_line.startswith("※"):
+                    # 雑多な注意事項や空行をスキップ
+                    if clean_line and not clean_line.startswith("※") and "ご購入は" not in clean_line and "受付中" not in clean_line:
                         parsed_track_lines.append(clean_line)
 
             if parsed_track_lines:
@@ -191,8 +212,8 @@ def scrape_freestyle(existing_records_map):
                 "image_url": image_url,
                 "audio_url": audio_url,
                 "tracks": tracks,
-                "genre": detected_genres[0], # 筆頭のメインジャンル
-                "genres": detected_genres,  # ★ 該当するタグ全件の配列
+                "genre": detected_genres[0],
+                "genres": detected_genres,
                 "is_sold_out": is_sold_out,
                 "release_date": release_date_str,
                 "scraped_at": current_time_iso
