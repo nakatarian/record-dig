@@ -19,18 +19,19 @@ let currentSiteFilter = 'newtone'; // 初期表示は Newtone
 
 function sortRecordsByReleaseDate(records) {
   return records.sort((a, b) => {
-    // updated_at や release_date を基準にソート
-    const dateA = a.updated_at || a.release_date || "";
-    const dateB = b.updated_at || b.release_date || "";
+    // 1優先: release_date (更新日付 YYYY-MM-DD) の新しい順
+    const dateA = a.release_date || "";
+    const dateB = b.release_date || "";
 
     if (dateA !== dateB) {
-      return dateB.localeCompare(dateA);
+      return dateB.localeCompare(dateA); // 降順 (新しい日付が上)
     }
 
-    const timeA = new Date(a.created_at || a.scraped_at || 0).getTime();
-    const timeB = new Date(b.created_at || b.scraped_at || 0).getTime();
+    // 2優先: scraped_at または created_at (取得・更新時刻) の新しい順
+    const timeA = new Date(a.scraped_at || a.created_at || a.updated_at || 0).getTime();
+    const timeB = new Date(b.scraped_at || b.created_at || b.updated_at || 0).getTime();
 
-    return timeB - timeA;
+    return timeB - timeA; // 降順 (新しい時刻が上)
   });
 }
 
@@ -42,8 +43,8 @@ function formatRecordDate(record) {
 
   // 従来通りのフォールバック処理
   let timeStr = "";
-  if (record.created_at) {
-    const dateObj = new Date(record.created_at);
+  if (record.created_at || record.scraped_at) {
+    const dateObj = new Date(record.created_at || record.scraped_at);
     const hours = String(dateObj.getHours()).padStart(2, '0');
     const minutes = String(dateObj.getMinutes()).padStart(2, '0');
     timeStr = ` (${hours}:${minutes}更新)`;
@@ -57,8 +58,9 @@ function getLatestScrapedTime(records) {
   if (!records || records.length === 0) return new Date().getTime();
   
   const latestIso = records.reduce((max, r) => {
-    return (r.scraped_at > max) ? r.scraped_at : max;
-  }, records[0].scraped_at);
+    const scraped = r.scraped_at || r.created_at;
+    return (scraped && scraped > max) ? scraped : max;
+  }, records[0].scraped_at || records[0].created_at || new Date().toISOString());
 
   return new Date(latestIso).getTime();
 }
@@ -68,8 +70,9 @@ function updateHeaderLastUpdated(records) {
   if (!updatedEl || !records || records.length === 0) return;
 
   const latestScraped = records.reduce((max, r) => {
-    return (r.scraped_at > max) ? r.scraped_at : max;
-  }, records[0].scraped_at);
+    const scraped = r.scraped_at || r.created_at;
+    return (scraped && scraped > max) ? scraped : max;
+  }, records[0].scraped_at || records[0].created_at || "");
 
   if (latestScraped) {
     const date = new Date(latestScraped);
@@ -87,11 +90,12 @@ function updateHeaderLastUpdated(records) {
 // ==========================================
 
 async function fetchRecords() {
+  // Supabaseから release_date(降順) -> scraped_at(降順) で取得
   let query = supabaseClient
     .from('records')
     .select('*')
-    .order('updated_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
+    .order('release_date', { ascending: false, nullsFirst: false })
+    .order('scraped_at', { ascending: false, nullsFirst: false })
     .limit(150);
 
   const { data, error } = await query;
@@ -101,6 +105,7 @@ async function fetchRecords() {
     return;
   }
 
+  // JS側でも念のため二重ソートをかけて確実に整列
   allRecords = sortRecordsByReleaseDate(data || []);
   applyFiltersAndRender();
   updateHeaderLastUpdated(allRecords);
@@ -145,8 +150,8 @@ function createRecordCard(record, latestScrapedTime) {
   let recordTime = null;
   if (record.updated_at) {
     recordTime = new Date(record.updated_at).getTime();
-  } else if (record.release_date && record.created_at) {
-    const createdDate = new Date(record.created_at);
+  } else if (record.release_date && (record.created_at || record.scraped_at)) {
+    const createdDate = new Date(record.created_at || record.scraped_at);
     const hours = String(createdDate.getHours()).padStart(2, '0');
     const minutes = String(createdDate.getMinutes()).padStart(2, '0');
     const seconds = String(createdDate.getSeconds()).padStart(2, '0');
