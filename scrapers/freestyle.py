@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 FREESTYLE_ALL_URL = "https://freestyleonline.net/list.php?GENRE=ALL"
 
-# 指定タグの変換マッピング
 TAG_MAP = {
     "techhouse": "Tech House",
     "minimal": "Minimal",
@@ -22,7 +21,6 @@ HEADERS = {
 
 def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, existing_records_map):
     """1つの商品詳細ページをスクレイピングする関数"""
-    JST = timezone(timedelta(hours=9))
     try:
         detail_res = session.get(item_url, timeout=15)
         detail_res.encoding = detail_res.apparent_encoding or 'utf-8'
@@ -46,11 +44,10 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             return None
 
         # --------------------------------------------------
-        # 日付の分離処理
+        # 日付の抽出 (画面上の「更新日」を release_date として取得)
         # --------------------------------------------------
-        update_datetime = None
+        item_date = None
         upcoming_arrival_date = None
-        has_time_info = False
 
         for tr in detail_soup.find_all("tr"):
             tr_text = tr.text.strip()
@@ -60,32 +57,24 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
                 found_date_str = date_match.group(0).replace('.', '-').replace('/', '-')
                 try:
                     d_obj = datetime.strptime(found_date_str, "%Y-%m-%d").date()
-                    
-                    time_match = re.search(r'(\d{1,2}):(\d{2})', tr_text)
-                    if time_match:
-                        hh, mm = map(int, time_match.groups())
-                        dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, hh, mm, tzinfo=JST)
-                        has_time_info = True
-                    else:
-                        dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, 0, 0, tzinfo=JST)
-
                     if "入荷予定" in tr_text:
                         if d_obj > today:
                             upcoming_arrival_date = d_obj.strftime("%Y-%m-%d")
                     
-                    if "更新日" in tr_text or "更新" in tr_text:
-                        update_datetime = dt_obj
-
+                    if "更新日" in tr_text:
+                        item_date = d_obj
                 except ValueError:
                     pass
 
-        if not update_datetime:
-            update_datetime = now_jst
-            has_time_info = True
+        # ページ内に更新日がない場合は本日日付を設定
+        if not item_date:
+            item_date = today
 
         # 7日以上前の過去データはスキップ
-        if update_datetime.date() < cutoff_past_date:
+        if item_date < cutoff_past_date:
             return None
+
+        release_date_str = item_date.strftime("%Y-%m-%d")
 
         # --------------------------------------------------
         # タイトル・キャットナンバー
@@ -139,33 +128,11 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
                 filename = audio_match.group(1)
                 audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
-        tracks = []
-        parsed_track_lines = []
-        track_td = detail_soup.find("td", attrs={"colspan": "2"})
-        if track_td:
-            lines = track_td.get_text(separator="\n").splitlines()
-            for line in lines:
-                clean_line = line.strip()
-                if re.match(r'^[A-D][1-9]\s*:', clean_line):
-                    parsed_track_lines.append(clean_line)
-
-        if parsed_track_lines:
-            for line in parsed_track_lines:
-                tracks.append({"title": line, "audio_url": audio_url})
-        else:
-            tracks.append({"title": title, "audio_url": audio_url})
+        tracks = [{"title": "Listen Sample (Full)", "audio_url": audio_url}]
 
         # --------------------------------------------------
         # データの組み立て
         # --------------------------------------------------
-        updated_at_iso = update_datetime.isoformat()
-
-        # 時間情報がある場合とない場合でログ表示を切替
-        if has_time_info:
-            log_time_str = f"{update_datetime.strftime('%Y-%m-%d (%H:%M更新)')}"
-        else:
-            log_time_str = f"{update_datetime.strftime('%Y-%m-%d')}"
-
         record_data = {
             "site": "freestyle",
             "item_url": item_url,
@@ -178,8 +145,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             "genres": detected_genres,
             "is_sold_out": is_sold_out,
             "upcoming_arrival_date": upcoming_arrival_date,
-            "updated_at": updated_at_iso,
-            # Supabaseにテーブル列が存在しないため updated_display は含めない
+            "release_date": release_date_str,  # ★ ここに更新日をセット
             "scraped_at": now_jst.isoformat()
         }
 
@@ -197,7 +163,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         item_id = item_url.split("=")[-1] if "=" in item_url else item_url
         
         genres_label = ", ".join(detected_genres)
-        print(f"  ✓ [FREESTYLE] [{genres_label}] ({log_time_str}) {title}")
+        print(f"  ✓ [FREESTYLE] [{genres_label}] ({release_date_str}) {title}")
         return item_id, record_data
 
     except Exception as e:
@@ -257,6 +223,6 @@ def scrape_freestyle(existing_records_map):
                 records_map[item_id] = record_data
 
     results = list(records_map.values())
-    results.sort(key=lambda x: x["updated_at"], reverse=True)
+    results.sort(key=lambda x: x["release_date"], reverse=True)
 
     return results
