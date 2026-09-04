@@ -113,7 +113,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
         # --------------------------------------------------
-        # 音声 & トラックリスト
+        # 音声 & トラックリストの抽出
         # --------------------------------------------------
         audio_url = ""
         listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
@@ -129,7 +129,18 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
                 filename = audio_match.group(1)
                 audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
-        tracks = [{"title": "Listen Sample (Full)", "audio_url": audio_url}]
+        # トラック名テキストの解析 (A1:, B1: などの行を抽出)
+        parsed_tracks = []
+        lines = page_text.split('\n')
+        for line in lines:
+            line_str = line.strip()
+            # A1, A2, B1, B2, C1, 1., 2. などで始まるトラック名行を抽出
+            if re.match(r'^(?:[A-Z]\d+|\d+[\.\)]|\([A-Z\d]+\))\s*[:\.\-]?\s*.+', line_str, re.IGNORECASE):
+                parsed_tracks.append({"title": line_str, "audio_url": ""})
+
+        # トラック名が抽出できなかった場合のフォールバック
+        if not parsed_tracks:
+            parsed_tracks = [{"title": "Listen Sample (Full)", "audio_url": audio_url}]
 
         # --------------------------------------------------
         # データの組み立て
@@ -141,7 +152,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             "cat_no": cat_no,
             "image_url": image_url,
             "audio_url": audio_url,
-            "tracks": tracks,
+            "tracks": parsed_tracks,
             "genre": detected_genres[0],
             "genres": detected_genres,
             "is_sold_out": is_sold_out,
@@ -231,7 +242,9 @@ def scrape_freestyle(existing_records_map):
                 item_id, record_data = res
                 records_map[item_id] = record_data
 
+    # 戻り値を整理する際、release_date -> scraped_at の順で降順（新しい順）にソート
     results = list(records_map.values())
-    results.sort(key=lambda x: x["release_date"], reverse=True)
-
-    return results
+    results.sort(
+        key=lambda x: (x.get("release_date") or "", x.get("scraped_at") or ""), 
+        reverse=True
+    )

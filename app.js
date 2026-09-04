@@ -252,23 +252,58 @@ function openModal(recordId) {
 
   if (tracksContainer) {
     const tracks = record.tracks || [];
-    if (tracks.length === 0 && record.audio_url) {
-      tracksContainer.innerHTML = `
-        <div class="track-item">
-          <div class="track-name">Sample Track</div>
-          <audio class="track-audio" controls src="${record.audio_url}"></audio>
-        </div>
-      `;
-    } else if (tracks.length > 0) {
-      tracksContainer.innerHTML = tracks.map(track => `
-        <div class="track-item">
-          <div class="track-name">${track.title}</div>
-          <audio class="track-audio" controls src="${track.audio_url}" preload="none"></audio>
-        </div>
-      `).join('');
-    } else {
-      tracksContainer.innerHTML = '<div style="color: var(--text-sub); font-size: 12px;">試聴音源はありません。</div>';
+    const isFreestyle = (record.site || '').toLowerCase() === 'freestyle';
+    let html = '';
+
+    // 【パターンA】Freestyle（1音声ファイル ＋ トラックリストテキスト）
+    if (isFreestyle) {
+      // 1. 全曲共通の試聴プレイヤーを一番上に表示
+      if (record.audio_url) {
+        html += `
+          <div class="main-audio-player" style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+            <div style="font-size: 12px; color: var(--text-sub); margin-bottom: 6px; font-weight: bold;">🔊 Listen Sample (Full)</div>
+            <audio controls src="${record.audio_url}" style="width: 100%;"></audio>
+          </div>
+        `;
+      }
+
+      // 2. トラックリスト（A1, A2...などのテキスト）を一覧表示
+      if (tracks.length > 0) {
+        html += `<div class="track-list-text" style="display: flex; flex-direction: column; gap: 6px;">`;
+        tracks.forEach(track => {
+          html += `
+            <div class="track-title-only" style="font-size: 13px; color: var(--text-main, #e0e0e0); font-family: monospace; padding: 4px 8px; background: rgba(255,255,255,0.02); border-radius: 4px;">
+              ${track.title}
+            </div>
+          `;
+        });
+        html += `</div>`;
+      } else if (!record.audio_url) {
+        html = '<div style="color: var(--text-sub); font-size: 12px;">試聴音源・トラック情報はありません。</div>';
+      }
+    } 
+    // 【パターンB】Newtone（各トラックごとに個別音声ファイル）
+    else {
+      if (tracks.length > 0) {
+        html = tracks.map(track => `
+          <div class="track-item" style="margin-bottom: 10px;">
+            <div class="track-name" style="font-size: 13px; margin-bottom: 4px;">${track.title}</div>
+            <audio class="track-audio" controls src="${track.audio_url}" preload="none" style="width: 100%;"></audio>
+          </div>
+        `).join('');
+      } else if (record.audio_url) {
+        html = `
+          <div class="track-item">
+            <div class="track-name">Sample Track</div>
+            <audio class="track-audio" controls src="${record.audio_url}" style="width: 100%;"></audio>
+          </div>
+        `;
+      } else {
+        html = '<div style="color: var(--text-sub); font-size: 12px;">試聴音源はありません。</div>';
+      }
     }
+
+    tracksContainer.innerHTML = html;
   }
 
   if (modal) modal.classList.add('active');
