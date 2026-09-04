@@ -13,8 +13,6 @@ from datetime import datetime, timezone, timedelta, date
 # ==========================================
 SUPABASE_URL = "https://slnraznxgatrefbuawqy.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY")
-
-# ★ Discord Webhook URL
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 if not SUPABASE_KEY:
@@ -27,13 +25,11 @@ except Exception as e:
     print(f"❌ [Supabase初期化エラー] {e}")
     sys.exit(1)
 
-# スクレイピング対象カテゴリ
 CATEGORIES = [
     {"name": "Deep House", "url": "https://www.newtone-records.com/store/deephouse/"},
     {"name": "Tech House", "url": "https://www.newtone-records.com/store/techhouse/"}
 ]
 
-# ジャンルタグの正規化マップ
 GENRE_MAP = {
     "deep house": "Deep House",
     "deep tech house": "Deep House",
@@ -44,25 +40,39 @@ GENRE_MAP = {
     "minimal techno": "Minimal"
 }
 
-# ★ 許可するアナログレコード用キーワードの一覧
 VINYL_FORMAT_KEYWORDS = [
     "12inch", "10inch", "7inch", "12\"", "10\"", "7\"",
     "lp", "2lp", "3lp", "vinyl", "ep", "flexi"
 ]
 
+# 海外サーバー/クラウドIPブロックを回避するためのリアルなブラウザヘッダー
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-    "Referer": "https://www.newtone-records.com/"
+    "Cache-Control": "max-age=0",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1"
 }
+
+# リトライ付き通信用関数
+def fetch_url(session, url, retries=3, timeout=30):
+    for i in range(retries):
+        try:
+            res = session.get(url, timeout=timeout)
+            if res.status_code == 200:
+                return res
+        except Exception as e:
+            if i == retries - 1:
+                raise e
+            time.sleep(2)
+    return None
 
 # ==========================================
 # 2. 通知・補助関数
 # ==========================================
 
 def send_discord_notification(new_titles):
-    """ Discord Webhook で在庫ありの新着タイトル一覧を通知 """
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ DISCORD_WEBHOOK_URL が設定されていないため通知をスキップします。")
         return
@@ -71,20 +81,14 @@ def send_discord_notification(new_titles):
     titles_str = "\n".join([f"・{t}" for t in new_titles])
     message = f"🎵 **【NEWTONE】新着レコードが {count} 件追加されました！（在庫あり）**\n\n{titles_str}"
 
-    payload = {
-        "content": message
-    }
     try:
-        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        res = requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=10)
         if res.status_code in [200, 204]:
-            print(f"📲 Discord通知を送信しました: NEWTONEに新着レコード {count} 件追加（在庫ありのみ）")
-        else:
-            print(f"❌ Discord通知送信失敗: {res.status_code} - {res.text}")
+            print(f"📲 Discord通知を送信しました: NEWTONEに新着レコード {count} 件追加")
     except Exception as e:
         print(f"❌ Discord通知エラー: {e}")
 
 def clean_audio_url(file_src, base_url):
-    """ 音源URLのドメイン・パス補正 """
     if not file_src: return ""
     full_url = urljoin(base_url, file_src.strip())
     full_url = full_url.replace("www.newtone-records.com", "dept.newtone-records.com")
@@ -94,7 +98,6 @@ def clean_audio_url(file_src, base_url):
     return full_url
 
 def extract_track_list_tracks(detail_soup, item_url):
-    """ トラックリストおよび各曲試聴URLの抽出 """
     tracks = []
     heading = detail_soup.find(lambda tag: tag.name in ['h3', 'h4', 'div', 'p', 'span', 'dt'] and 'Track List' in tag.text)
     if heading:
@@ -114,15 +117,12 @@ def extract_track_list_tracks(detail_soup, item_url):
     return tracks
 
 def cleanup_old_records(days=7):
-    """ DB内のデータのうち、登録日時（created_at）が指定日数より古いものを自動削除する """
     try:
         threshold_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         res = supabase.table("records").delete().lt("created_at", threshold_date).execute()
         deleted_count = len(res.data) if res.data else 0
         if deleted_count > 0:
             print(f"🧹 保持期間（{days}日間）を超えた古いデータ {deleted_count} 件を自動削除しました。")
-        else:
-            print(f"🧹 保持期間オーバーのデータはありません。")
     except Exception as e:
         print(f"⚠️ データ自動クリーニングエラー: {e}")
 
@@ -135,11 +135,8 @@ def scrape_and_update():
     session.headers.update(HEADERS)
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
-
-    # 直近7日前の日付境界線
     cutoff_date = date.today() - timedelta(days=7)
 
-    # ★ 既存データの item_url と created_at を読み込み
     existing_records = {}
     is_first_run = False
     try:
@@ -147,15 +144,17 @@ def scrape_and_update():
         if res.data:
             existing_records = {r["item_url"].strip(): r.get("created_at") for r in res.data if r.get("item_url")}
         else:
-            is_first_run = True  # DBが空の場合は初回実行と判定
+            is_first_run = True
     except Exception as e:
         print(f"⚠️ 既存データの読み込み時にスキップ: {e}")
 
     for cat in CATEGORIES:
         print(f"\n🔍 カテゴリ巡回開始: {cat['name']}")
         try:
-            res = session.get(cat["url"], timeout=15)
-            if res.status_code != 200: continue
+            res = fetch_url(session, cat["url"], retries=3, timeout=30)
+            if not res or res.status_code != 200: 
+                print(f"  ⚠️ アクセス失敗のためスキップ")
+                continue
         except Exception as e:
             print(f"❌ カテゴリページの取得エラー ({cat['name']}): {e}")
             continue
@@ -176,44 +175,37 @@ def scrape_and_update():
                     item_links.append((item_id, full_url))
 
         for item_id, item_url in item_links:
-            # すでに別カテゴリ経由で取得済みの場合はスキップ
             if item_id in records_map: continue
 
-            time.sleep(0.15)
+            time.sleep(0.3)
             try:
-                detail_res = session.get(item_url, timeout=10)
-                if detail_res.status_code != 200: continue
+                detail_res = fetch_url(session, item_url, retries=2, timeout=20)
+                if not detail_res or detail_res.status_code != 200: continue
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
                 page_text = detail_soup.text
 
-                # タイトル抽出
                 title = ""
                 title_el = detail_soup.select_one("h1, .item-title, .item_title, .title, #title")
                 if title_el: title = title_el.text.strip()
                 if not title and detail_soup.title: title = detail_soup.title.text.strip()
                 if title: title = re.sub(r'\s*\|\s*NEWTONE\s*RECORDS.*$', '', title, flags=re.IGNORECASE).strip()
 
-                # ★【修正箇所：tab-list属性に基づくDigital単体盤のフィルタリング処理】
-                # NEWTONEのフォーマットタブ (<ul class="tab-list"> 内の <li tab="...">) を取得
+                # ★ デジタル単体盤スキップ（安全対策付き）
                 tab_lis = detail_soup.select("ul.tab-list li[tab]")
-                
-                # tab属性の値（"12inch", "Digital" など）を抽出して小文字化
                 available_formats = [li.get("tab", "").strip().lower() for li in tab_lis if li.get("tab")]
 
-                # 1. アナログ盤フォーマット（12inch, LPなど）がタブに含まれているかチェック
-                has_vinyl = any(
-                    any(k in fmt for k in VINYL_FORMAT_KEYWORDS)
-                    for fmt in available_formats
-                )
-
-                # 2. タブに "digital" しか存在しない（＝Digital単体盤）場合、またはタイトルに (Download) がありアナログ盤要素が無い場合はスキップ
-                is_digital_only = ("digital" in available_formats and not has_vinyl) or (available_formats == ["digital"])
+                if available_formats:
+                    has_vinyl = any(any(k in fmt for k in VINYL_FORMAT_KEYWORDS) for fmt in available_formats)
+                    is_digital_only = ("digital" in available_formats and not has_vinyl) or (available_formats == ["digital"])
+                else:
+                    has_vinyl = any(k in page_text.lower() for k in VINYL_FORMAT_KEYWORDS)
+                    is_digital_only = "digital" in page_text.lower() and not has_vinyl
 
                 if is_digital_only or ("(download)" in title.lower() and not has_vinyl):
                     print(f"  ⏭️ スキップ (Digital単体盤): {title}")
                     continue
 
-                # ★ 日付チェック（例: 2026-09-01）
+                # 日付チェック
                 date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
                 release_date_str = None
                 if date_match:
@@ -221,15 +213,12 @@ def scrape_and_update():
                     try:
                         item_date = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
                         release_date_str = raw_date_str
-
-                        # 直近7日より古い日付に到達したら、このカテゴリの取得を切り上げて次のカテゴリへ移動
                         if item_date < cutoff_date:
                             print(f"  ⏹️ {item_date} のデータに達したため {cat['name']} の取得を終了し次へ移動します。")
                             break
                     except ValueError:
                         pass
 
-                # ハッシュタグから対応ジャンルを検出
                 detected_genres = []
                 for elem in detail_soup.find_all(string=True):
                     txt = elem.strip()
@@ -240,7 +229,6 @@ def scrape_and_update():
 
                 if not detected_genres: continue
 
-                # 画像URL抽出
                 image_url = ""
                 og_img = detail_soup.select_one("meta[property='og:image']")
                 if og_img and og_img.get("content"): image_url = og_img.get("content", "").strip()
@@ -248,7 +236,6 @@ def scrape_and_update():
                     img_el = detail_soup.select_one(".item_img img, #item_img img, .item-image img, .main-img img, img[src*='/pic/'], img[src*='/product/']")
                     if img_el and img_el.get("src"): image_url = urljoin(item_url, img_el["src"])
 
-                # 型番
                 cat_no = ""
                 cat_el = detail_soup.select_one("li.catno, .catno, .cat-no, .catalog, .code, .cat_no")
                 if cat_el: cat_no = cat_el.text.strip()
@@ -257,11 +244,9 @@ def scrape_and_update():
                     if cat_match: cat_no = cat_match.group(1).strip()
                 cat_no = re.sub(r'^(?:Cat\s*No\.?:?\s*|型番\s*:\s*)', '', cat_no, flags=re.IGNORECASE).strip()
 
-                # 在庫ステータス
                 page_text_upper = page_text.upper()
                 is_sold_out = ("OUT OF STOCK" in page_text_upper or "SOLD OUT" in page_text_upper or "売り切れ" in page_text_upper or bool(detail_soup.select_one(".soldout, .sold-out, .out-of-stock")))
 
-                # トラック情報・音声URL
                 tracks = extract_track_list_tracks(detail_soup, item_url)
                 audio_url = tracks[0]["audio_url"] if tracks else ""
 
@@ -279,7 +264,6 @@ def scrape_and_update():
                     "scraped_at": current_time_iso
                 }
 
-                # ★ 既存データがあれば過去の created_at を維持
                 if item_url in existing_records:
                     record_data["created_at"] = existing_records[item_url]
                 else:
@@ -293,20 +277,16 @@ def scrape_and_update():
     records_to_insert = list(records_map.values())
     if records_to_insert:
         try:
-            # ★ 在庫あり（is_sold_out=False）かつ DB未登録 の新規タイトルだけを収集
             notifiable_titles = [
                 r["title"] for r in records_to_insert 
                 if r["item_url"] not in existing_records and not r["is_sold_out"]
             ]
             
-            # データベースへUpsert（更新・挿入）
             supabase.table("records").upsert(records_to_insert, on_conflict="item_url").execute()
             print(f"\n🎉 データベース書き込み完了！（取得総数: {len(records_to_insert)}件）")
             
-            # ★ 7日以上経過した古いレコードをDBから自動削除
             cleanup_old_records(days=7)
 
-            # ★ 初回実行時ではなく、在庫ありの新着が1件以上ある時のみタイトルリスト付きでDiscord通知
             if not is_first_run and len(notifiable_titles) > 0:
                 send_discord_notification(notifiable_titles)
             else:
