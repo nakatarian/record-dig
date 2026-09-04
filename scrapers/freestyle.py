@@ -65,10 +65,10 @@ def scrape_freestyle(existing_records_map):
             page_text = detail_soup.text
 
             # --------------------------------------------------
-            # ② 該当タグ（複数対応）の抽出
+            # ② 該当タグ（複数対応・大文字小文字無視）の抽出
             # --------------------------------------------------
             detected_genres = []
-            tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text)
+            tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text, re.IGNORECASE)
             for t in tags_matched:
                 tag_lower = t.lower()
                 if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
@@ -135,25 +135,20 @@ def scrape_freestyle(existing_records_map):
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
             # --------------------------------------------------
-            # 画像URLの取得（修正点・画像リンクの正常化）
+            # 画像URLの取得
             # --------------------------------------------------
             image_url = ""
-            # ページ内のすべての img タグを走査
             for img in detail_soup.find_all("img"):
                 src = img.get("src", "")
                 if not src: continue
                 
                 src_lower = src.lower()
-                # ヘッダー、ロゴ、カート、アイコン、SNS類は除外
                 if any(x in src_lower for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "twitter", "facebook", "listen_b.gif"]):
                     continue
                 
-                # 商品画像が入る可能性が高いパス、または拡張子を特定
-                # (例: /listen/img/, /photo/, /item/ など)
                 if any(x in src_lower for x in ["/listen/img/", "/photo/", "/item/", "disco", ".jpg", ".jpeg", ".png"]):
-                    # 相対パス（./photo/...）を urljoin で絶対URLに変換
                     image_url = urljoin(item_url, src)
-                    break # 最初に見つかったメイン画像を画像URLとする
+                    break
 
             # --------------------------------------------------
             # 在庫状態の判定
@@ -179,26 +174,22 @@ def scrape_freestyle(existing_records_map):
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
             # --------------------------------------------------
-            # トラックリストの取得（修正点・特定パターン抽出）
-            # A1:, A2:, B1:, B2: などで始まる行のみを抽出
+            # トラックリストの取得（1曲ずつ改行するよう変更）
             # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
 
-            # 曲名が書かれている td セル（colspan="2"）を取得
             track_td = detail_soup.find("td", attrs={"colspan": "2"})
             if track_td:
-                # get_text(separator="\n") で改行区切りテキストを取得し、行ごとに処理
                 lines = track_td.get_text(separator="\n").splitlines()
                 for line in lines:
                     clean_line = line.strip()
-                    # 正規表現で「行頭が A-D の英字 + 1-9 の数字 + 任意のスペース + コロン」を判定
                     if re.match(r'^[A-D][1-9]\s*:', clean_line):
                         parsed_track_lines.append(clean_line)
 
-            # 抽出されたトラック行があれば「 / 」で連結、なければタイトルを使用
+            # 1曲ずつ改行 (\n) で結合
             if parsed_track_lines:
-                combined_track_title = " / ".join(parsed_track_lines)
+                combined_track_title = "\n".join(parsed_track_lines)
             else:
                 combined_track_title = title
 
@@ -247,4 +238,4 @@ if __name__ == "__main__":
         print(f"・ジャンル: {r['genres']} | タイトル: {r['title']} | 日付: {r['release_date']}")
         print(f"  画像: {r['image_url']}")
         print(f"  音源: {r['audio_url']}")
-        print(f"  曲名: {r['tracks'][0]['title'] if r['tracks'] else 'なし'}\n")
+        print(f"  曲名:\n{r['tracks'][0]['title'] if r['tracks'] else 'なし'}\n")
