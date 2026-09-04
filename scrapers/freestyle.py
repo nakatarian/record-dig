@@ -72,7 +72,6 @@ def scrape_freestyle(existing_records_map):
             tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text)
             for t in tags_matched:
                 tag_lower = t.lower()
-                # 対象のタグ（techhouse, minimal, deep）に一致するものだけを配列に追加
                 if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
                     detected_genres.append(TAG_MAP[tag_lower])
 
@@ -81,14 +80,27 @@ def scrape_freestyle(existing_records_map):
                 continue
 
             # --------------------------------------------------
-            # ① 日付のチェック
-            # 入荷予定（今日以降）：すべて取得
-            # 入荷済み（今日より過去）：1週間以内（7日前まで）のみ取得
+            # ① 日付の抽出・判定（入荷予定日を優先、なければ更新日）
             # --------------------------------------------------
-            dates = re.findall(r'20\d{2}[./-]\d{2}[./-]\d{2}', page_text)
             release_date_str = None
-            if dates:
-                raw_date_str = dates[0].replace('.', '-').replace('/', '-')
+            
+            # 「入荷予定日」の行を優先検索
+            arrival_match = re.search(r'入荷予定日\s*(20\d{2}[./-]\d{2}[./-]\d{2})', page_text)
+            update_match = re.search(r'更新日\s*(20\d{2}[./-]\d{2}[./-]\d{2})', page_text)
+            
+            target_date_raw = None
+            if arrival_match:
+                target_date_raw = arrival_match.group(1)
+            elif update_match:
+                target_date_raw = update_match.group(1)
+            else:
+                # パターンが見つからない場合はページ全体の最初のyyy.mm.ddを取得
+                dates = re.findall(r'20\d{2}[./-]\d{2}[./-]\d{2}', page_text)
+                if dates:
+                    target_date_raw = dates[0]
+
+            if target_date_raw:
+                raw_date_str = target_date_raw.replace('.', '-').replace('/', '-')
                 try:
                     item_date = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
                     release_date_str = raw_date_str
@@ -115,8 +127,9 @@ def scrape_freestyle(existing_records_map):
             if cat_match:
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
+            # --- 画像URLの取得（完全パス化） ---
             image_url = ""
-            img_el = detail_soup.select_one("img[src*='image/'], img[src*='photo/'], img[src*='item/']")
+            img_el = detail_soup.select_one("img[src*='listen/img/'], img[src*='img/']")
             if img_el and img_el.get("src"):
                 image_url = urljoin(item_url, img_el["src"])
 
@@ -127,19 +140,40 @@ def scrape_freestyle(existing_records_map):
             is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
             # --------------------------------------------------
-            # ③ 音声ファイル (.mp3) の抽出
+            # ③ 音声ファイル (.mp3) の抽出（OPENLISTENから直接取得）
+            # --------------------------------------------------
+            audio_url = ""
+            listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
+            if listen_a_tag:
+                href_attr = listen_a_tag.get("href", "")
+                m = re.search(r"OPENLISTEN\('([^']+)'\)", href_attr, re.IGNORECASE)
+                if m:
+                    audio_url = urljoin(item_url, m.group(1))
+
+            # バックアップ: OPENLISTENから取れない場合は正規表現で.mp3を探す
+            if not audio_url:
+                audio_match = re.search(r"([a-zA-Z0-9_\-]+\.mp3)", page_text)
+                if audio_match:
+                    filename = audio_match.group(1)
+                    audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
+
+            # --------------------------------------------------
+            # トラックリスト（行ごと・接頭辞不問）の取得
             # --------------------------------------------------
             tracks = []
-            audio_url = ""
+            parsed_track_lines = []
 
-            audio_match = re.search(r"([a-zA-Z0-9_\-]+\.mp3)", page_text)
-            if audio_match:
-                filename = audio_match.group(1)
-                audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
+            # トラックリストが記載される <td> (colspan="2") を特定して取得
+            track_td = detail_soup.find("td", attrs={"colspan": "2"})
+            if track_td:
+                for line in track_td.get_text(separator="\n").splitlines():
+                    clean_line = line.strip()
+                    # 雑多な文字列・価格表記・ボタンテキストを除外して曲名行のみ抽出
+                    if clean_line and not clean_line.endswith("yen") and "Listen" not in clean_line and not clean_line.startswith("※"):
+                        parsed_track_lines.append(clean_line)
 
-            track_matches = re.findall(r'([A-D][1-9]\s*:\s*[^:\n]+)', page_text)
-            if track_matches:
-                combined_track_title = " / ".join([t.strip() for t in track_matches])
+            if parsed_track_lines:
+                combined_track_title = " / ".join(parsed_track_lines)
             else:
                 combined_track_title = title
 
@@ -172,7 +206,7 @@ def scrape_freestyle(existing_records_map):
             item_id = item_url.split("=")[-1] if "=" in item_url else item_url
             records_map[item_id] = record_data
             
-            # ログ表示（複数ジャンルの確認用）
+            # ログ表示
             genres_label = ", ".join(detected_genres)
             print(f"  ✓ [FREESTYLE] [{genres_label}] ({release_date_str}) {title}")
 
@@ -186,4 +220,7 @@ if __name__ == "__main__":
     test_results = scrape_freestyle({})
     print(f"\n✅ 取得完了: 計 {len(test_results)} 件")
     for r in test_results:
-        print(f"・ジャンル全件: {r['genres']} | タイトル: {r['title']} | 日付: {r['release_date']} | 音源: {r['audio_url']}")
+        print(f"・ジャンル全件: {r['genres']} | タイトル: {r['title']} | 日付: {r['release_date']}")
+        print(f"  画像: {r['image_url']}")
+        print(f"  音源: {r['audio_url']}")
+        print(f"  曲名一覧: {r['tracks'][0]['title'] if r['tracks'] else 'なし'}\n")
