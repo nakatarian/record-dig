@@ -44,6 +44,12 @@ GENRE_MAP = {
     "minimal techno": "Minimal"
 }
 
+# ★ 許可するアナログレコード用キーワードの一覧
+VINYL_FORMAT_KEYWORDS = [
+    "12inch", "10inch", "7inch", "12\"", "10\"", "7\"",
+    "lp", "2lp", "3lp", "vinyl", "ep", "flexi"
+]
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -130,7 +136,7 @@ def scrape_and_update():
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
 
-    # 直近7日前の日付境界線（例: 本日が 2026-09-04 の場合 2026-08-28 以降を対象とする）
+    # 直近7日前の日付境界線
     cutoff_date = date.today() - timedelta(days=7)
 
     # ★ 既存データの item_url と created_at を読み込み
@@ -180,6 +186,31 @@ def scrape_and_update():
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
                 page_text = detail_soup.text
 
+                # タイトル抽出
+                title = ""
+                title_el = detail_soup.select_one("h1, .item-title, .item_title, .title, #title")
+                if title_el: title = title_el.text.strip()
+                if not title and detail_soup.title: title = detail_soup.title.text.strip()
+                if title: title = re.sub(r'\s*\|\s*NEWTONE\s*RECORDS.*$', '', title, flags=re.IGNORECASE).strip()
+
+                # ★【修正箇所：Digital単体フィルタリング処理】
+                # 1. ページ内のタブやFormat箇所のテキストを全て取得
+                format_els = detail_soup.select(".instock, .format, .item-format, #format, [class*='format']")
+                all_format_text = " ".join([el.text.strip().lower() for el in format_els])
+
+                # 2. 12inch, LPなどのアナログレコードを示す表記がページ内に含まれているかチェック
+                has_vinyl = any(k in all_format_text or k in page_text.lower() for k in VINYL_FORMAT_KEYWORDS)
+
+                # 3. タイトルが (Download) でかつレコード要素が無い場合はスキップ
+                if "(download)" in title.lower() and not has_vinyl:
+                    print(f"  ⏭️ スキップ (Digital単体盤): {title}")
+                    continue
+
+                # 4. フォーマット欄に Digital のみがあり、レコード要素が全く存在しない場合はスキップ
+                if "digital" in all_format_text and not has_vinyl:
+                    print(f"  ⏭️ スキップ (Digital単体盤): {title}")
+                    continue
+
                 # ★ 日付チェック（例: 2026-09-01）
                 date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
                 release_date_str = None
@@ -206,13 +237,6 @@ def scrape_and_update():
                             detected_genres.append(GENRE_MAP[clean_tag])
 
                 if not detected_genres: continue
-
-                # タイトル抽出
-                title = ""
-                title_el = detail_soup.select_one("h1, .item-title, .item_title, .title, #title")
-                if title_el: title = title_el.text.strip()
-                if not title and detail_soup.title: title = detail_soup.title.text.strip()
-                if title: title = re.sub(r'\s*\|\s*NEWTONE\s*RECORDS.*$', '', title, flags=re.IGNORECASE).strip()
 
                 # 画像URL抽出
                 image_url = ""
