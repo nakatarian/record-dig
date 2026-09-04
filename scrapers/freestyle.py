@@ -50,6 +50,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         # --------------------------------------------------
         update_datetime = None
         upcoming_arrival_date = None
+        has_time_info = False
 
         for tr in detail_soup.find_all("tr"):
             tr_text = tr.text.strip()
@@ -64,6 +65,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
                     if time_match:
                         hh, mm = map(int, time_match.groups())
                         dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, hh, mm, tzinfo=JST)
+                        has_time_info = True
                     else:
                         dt_obj = datetime(d_obj.year, d_obj.month, d_obj.day, 0, 0, tzinfo=JST)
 
@@ -79,6 +81,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
 
         if not update_datetime:
             update_datetime = now_jst
+            has_time_info = True
 
         # 7日以上前の過去データはスキップ
         if update_datetime.date() < cutoff_past_date:
@@ -156,7 +159,12 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         # データの組み立て
         # --------------------------------------------------
         updated_at_iso = update_datetime.isoformat()
-        updated_display_str = f"{update_datetime.strftime('%Y-%m-%d')} ({update_datetime.strftime('%H:%M')}更新)"
+
+        # 時間情報がある場合とない場合でログ表示を切替
+        if has_time_info:
+            log_time_str = f"{update_datetime.strftime('%Y-%m-%d (%H:%M更新)')}"
+        else:
+            log_time_str = f"{update_datetime.strftime('%Y-%m-%d')}"
 
         record_data = {
             "site": "freestyle",
@@ -171,7 +179,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             "is_sold_out": is_sold_out,
             "upcoming_arrival_date": upcoming_arrival_date,
             "updated_at": updated_at_iso,
-            "updated_display": updated_display_str,
+            # Supabaseにテーブル列が存在しないため updated_display は含めない
             "scraped_at": now_jst.isoformat()
         }
 
@@ -189,7 +197,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         item_id = item_url.split("=")[-1] if "=" in item_url else item_url
         
         genres_label = ", ".join(detected_genres)
-        print(f"  ✓ [FREESTYLE] [{genres_label}] ({updated_display_str}) {title}")
+        print(f"  ✓ [FREESTYLE] [{genres_label}] ({log_time_str}) {title}")
         return item_id, record_data
 
     except Exception as e:
@@ -223,7 +231,6 @@ def scrape_freestyle(existing_records_map):
     target_links = []
     seen_urls = set()
 
-    # ★ 修正箇所: item.php ではなく detail.php や code= を含む商品URLを取得
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if "detail.php" in href or "code=" in href:
