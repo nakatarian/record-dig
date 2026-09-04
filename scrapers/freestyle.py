@@ -135,21 +135,25 @@ def scrape_freestyle(existing_records_map):
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
             # --------------------------------------------------
-            # 画像URLの取得（/photo/ や /item/ などを確実に捕捉）
+            # 画像URLの取得（修正点・画像リンクの正常化）
             # --------------------------------------------------
             image_url = ""
+            # ページ内のすべての img タグを走査
             for img in detail_soup.find_all("img"):
                 src = img.get("src", "")
                 if not src: continue
                 
-                # ヘッダー・アイコン・ボタン類は除外
-                if any(x in src.lower() for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "listen"]):
+                src_lower = src.lower()
+                # ヘッダー、ロゴ、カート、アイコン、SNS類は除外
+                if any(x in src_lower for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "twitter", "facebook", "listen_b.gif"]):
                     continue
                 
-                # photo, item, image フォルダ、または jpg/png 画像を特定
-                if any(x in src.lower() for x in ["photo", "item", "image", ".jpg", ".jpeg", ".png"]):
+                # 商品画像が入る可能性が高いパス、または拡張子を特定
+                # (例: /listen/img/, /photo/, /item/ など)
+                if any(x in src_lower for x in ["/listen/img/", "/photo/", "/item/", "disco", ".jpg", ".jpeg", ".png"]):
+                    # 相対パス（./photo/...）を urljoin で絶対URLに変換
                     image_url = urljoin(item_url, src)
-                    break
+                    break # 最初に見つかったメイン画像を画像URLとする
 
             # --------------------------------------------------
             # 在庫状態の判定
@@ -175,30 +179,24 @@ def scrape_freestyle(existing_records_map):
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
             # --------------------------------------------------
-            # トラックリストの厳密取得（HTMLタグや tags: を除外）
+            # トラックリストの取得（修正点・特定パターン抽出）
+            # A1:, A2:, B1:, B2: などで始まる行のみを抽出
             # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
 
-            # 曲名が書いてある td セル（colspan="2"）を取得
+            # 曲名が書かれている td セル（colspan="2"）を取得
             track_td = detail_soup.find("td", attrs={"colspan": "2"})
             if track_td:
-                # get_text(strip=True) ではなく改行区切りで純粋なテキストのみを抜き出す
+                # get_text(separator="\n") で改行区切りテキストを取得し、行ごとに処理
                 lines = track_td.get_text(separator="\n").splitlines()
                 for line in lines:
                     clean_line = line.strip()
-                    # 不要なタグ文字列、ハッシュタグ、価格、注記、空行を完全排除
-                    if (clean_line 
-                        and not clean_line.startswith("tags:") 
-                        and not clean_line.startswith("#") 
-                        and not clean_line.startswith("※") 
-                        and "ご購入は" not in clean_line 
-                        and "受付中" not in clean_line
-                        and "Tweet" not in clean_line
-                        and "yen" not in clean_line
-                        and "Listen" not in clean_line):
+                    # 正規表現で「行頭が A-D の英字 + 1-9 の数字 + 任意のスペース + コロン」を判定
+                    if re.match(r'^[A-D][1-9]\s*:', clean_line):
                         parsed_track_lines.append(clean_line)
 
+            # 抽出されたトラック行があれば「 / 」で連結、なければタイトルを使用
             if parsed_track_lines:
                 combined_track_title = " / ".join(parsed_track_lines)
             else:
