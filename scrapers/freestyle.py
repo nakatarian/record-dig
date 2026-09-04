@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-FREESTYLE_ALL_URL = "https://freestyleonline.net/list.php?GENRE=ALL"
+# ページ番号を含めるベースURL（1ページ目・2ページ目を取得）
+FREESTYLE_BASE_URL = "https://freestyleonline.net/list.php?GENRE=ALL&SRT=U&DSP=A&PAGENO={page}"
 
 TAG_MAP = {
     "techhouse": "Tech House",
@@ -44,7 +45,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             return None
 
         # --------------------------------------------------
-        # 日付の抽出 (画面上の「更新日」を release_date として取得)
+        # 日付の抽出 (release_date 用)
         # --------------------------------------------------
         item_date = None
         upcoming_arrival_date = None
@@ -145,7 +146,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             "genres": detected_genres,
             "is_sold_out": is_sold_out,
             "upcoming_arrival_date": upcoming_arrival_date,
-            "release_date": release_date_str,  # ★ ここに更新日をセット
+            "release_date": release_date_str,
             "scraped_at": now_jst.isoformat()
         }
 
@@ -181,32 +182,40 @@ def scrape_freestyle(existing_records_map):
     today = now_jst.date()
     cutoff_past_date = today - timedelta(days=7)
 
-    print(f"\n🔍 [FREESTYLE] 1ページ目取得開始: {FREESTYLE_ALL_URL}")
-    try:
-        res = session.get(FREESTYLE_ALL_URL, timeout=30)
-        res.encoding = res.apparent_encoding or 'utf-8'
-        if res.status_code != 200:
-            print("  ⚠️ FREESTYLEへのアクセスに失敗しました。")
-            return []
-    except Exception as e:
-        print(f"❌ [FREESTYLE] 通信エラー: {e}")
-        return []
-
-    soup = BeautifulSoup(res.text, "html.parser")
-    
     target_links = []
     seen_urls = set()
 
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "detail.php" in href or "code=" in href:
-            full_url = urljoin(FREESTYLE_ALL_URL, href).strip()
-            if full_url not in seen_urls:
-                seen_urls.add(full_url)
-                target_links.append(full_url)
+    # 1ページ目と2ページ目を順番に巡回してリンクを収集
+    for page in [1, 2]:
+        page_url = FREESTYLE_BASE_URL.format(page=page)
+        print(f"\n🔍 [FREESTYLE] {page}ページ目取得開始: {page_url}")
+        try:
+            res = session.get(page_url, timeout=30)
+            res.encoding = res.apparent_encoding or 'utf-8'
+            if res.status_code != 200:
+                print(f"  ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
+                continue
+        except Exception as e:
+            print(f"❌ [FREESTYLE] {page}ページ目 通信エラー: {e}")
+            continue
 
-    print(f"  📦 1ページ目から抽出された商品リンク: {len(target_links)} 件")
+        soup = BeautifulSoup(res.text, "html.parser")
 
+        page_links_count = 0
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "detail.php" in href or "code=" in href:
+                full_url = urljoin(page_url, href).strip()
+                if full_url not in seen_urls:
+                    seen_urls.add(full_url)
+                    target_links.append(full_url)
+                    page_links_count += 1
+
+        print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
+
+    print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
+
+    # 並列で詳細ページを分析
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
             executor.submit(
