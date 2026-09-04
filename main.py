@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 # 各スクレイパーをモジュールとして読み込み
 from scrapers.newtone import scrape_newtone
+from scrapers.freestyle import scrape_freestyle  # ★ 追加
 
 SUPABASE_URL = "https://slnraznxgatrefbuawqy.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_SECRET_KEY")
@@ -66,7 +67,9 @@ def main():
     all_scraped_records.extend(newtone_records)
 
     # 2. TEQ TOKYO (後でここに追加)
-    # 3. FREESTYLE (後でここに追加)
+    # 3. FREESTYLE 実行  ★ 追加
+    freestyle_records = scrape_freestyle(existing_records)
+    all_scraped_records.extend(freestyle_records)
 
     if all_scraped_records:
         try:
