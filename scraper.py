@@ -193,21 +193,23 @@ def scrape_and_update():
                 if not title and detail_soup.title: title = detail_soup.title.text.strip()
                 if title: title = re.sub(r'\s*\|\s*NEWTONE\s*RECORDS.*$', '', title, flags=re.IGNORECASE).strip()
 
-                # ★【修正箇所：Digital単体フィルタリング処理】
-                # 1. ページ内のタブやFormat箇所のテキストを全て取得
-                format_els = detail_soup.select(".instock, .format, .item-format, #format, [class*='format']")
-                all_format_text = " ".join([el.text.strip().lower() for el in format_els])
+                # ★【修正箇所：tab-list属性に基づくDigital単体盤のフィルタリング処理】
+                # NEWTONEのフォーマットタブ (<ul class="tab-list"> 内の <li tab="...">) を取得
+                tab_lis = detail_soup.select("ul.tab-list li[tab]")
+                
+                # tab属性の値（"12inch", "Digital" など）を抽出して小文字化
+                available_formats = [li.get("tab", "").strip().lower() for li in tab_lis if li.get("tab")]
 
-                # 2. 12inch, LPなどのアナログレコードを示す表記がページ内に含まれているかチェック
-                has_vinyl = any(k in all_format_text or k in page_text.lower() for k in VINYL_FORMAT_KEYWORDS)
+                # 1. アナログ盤フォーマット（12inch, LPなど）がタブに含まれているかチェック
+                has_vinyl = any(
+                    any(k in fmt for k in VINYL_FORMAT_KEYWORDS)
+                    for fmt in available_formats
+                )
 
-                # 3. タイトルが (Download) でかつレコード要素が無い場合はスキップ
-                if "(download)" in title.lower() and not has_vinyl:
-                    print(f"  ⏭️ スキップ (Digital単体盤): {title}")
-                    continue
+                # 2. タブに "digital" しか存在しない（＝Digital単体盤）場合、またはタイトルに (Download) がありアナログ盤要素が無い場合はスキップ
+                is_digital_only = ("digital" in available_formats and not has_vinyl) or (available_formats == ["digital"])
 
-                # 4. フォーマット欄に Digital のみがあり、レコード要素が全く存在しない場合はスキップ
-                if "digital" in all_format_text and not has_vinyl:
+                if is_digital_only or ("(download)" in title.lower() and not has_vinyl):
                     print(f"  ⏭️ スキップ (Digital単体盤): {title}")
                     continue
 
