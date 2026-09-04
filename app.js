@@ -19,8 +19,9 @@ let currentSiteFilter = 'newtone'; // 初期表示は Newtone
 
 function sortRecordsByReleaseDate(records) {
   return records.sort((a, b) => {
-    const dateA = a.release_date || "";
-    const dateB = b.release_date || "";
+    // updated_at や release_date を基準にソート
+    const dateA = a.updated_at || a.release_date || "";
+    const dateB = b.updated_at || b.release_date || "";
 
     if (dateA !== dateB) {
       return dateB.localeCompare(dateA);
@@ -33,16 +34,22 @@ function sortRecordsByReleaseDate(records) {
   });
 }
 
-function formatRecordDate(releaseDate, createdAtIso) {
+function formatRecordDate(record) {
+  // スクレイパー側で生成された updated_display があれば最優先で使用
+  if (record.updated_display) {
+    return record.updated_display;
+  }
+
+  // 従来通りのフォールバック処理
   let timeStr = "";
-  if (createdAtIso) {
-    const dateObj = new Date(createdAtIso);
+  if (record.created_at) {
+    const dateObj = new Date(record.created_at);
     const hours = String(dateObj.getHours()).padStart(2, '0');
     const minutes = String(dateObj.getMinutes()).padStart(2, '0');
     timeStr = ` (${hours}:${minutes}更新)`;
   }
   
-  const baseDate = releaseDate || "日付不明";
+  const baseDate = record.release_date || "日付不明";
   return `${baseDate}${timeStr}`;
 }
 
@@ -83,7 +90,7 @@ async function fetchRecords() {
   let query = supabaseClient
     .from('records')
     .select('*')
-    .order('release_date', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
     .limit(150);
 
@@ -132,11 +139,13 @@ function renderRecords(records) {
 }
 
 function createRecordCard(record, latestScrapedTime) {
-  const formattedMetaDate = formatRecordDate(record.release_date, record.created_at);
+  const formattedMetaDate = formatRecordDate(record);
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
 
   let recordTime = null;
-  if (record.release_date && record.created_at) {
+  if (record.updated_at) {
+    recordTime = new Date(record.updated_at).getTime();
+  } else if (record.release_date && record.created_at) {
     const createdDate = new Date(record.created_at);
     const hours = String(createdDate.getHours()).padStart(2, '0');
     const minutes = String(createdDate.getMinutes()).padStart(2, '0');
@@ -157,12 +166,18 @@ function createRecordCard(record, latestScrapedTime) {
     isNew = diffInHours >= 0 && diffInHours <= 24;
   }
 
+  // ★ 入荷予定バッジ（存在する場合のみ表示）
+  const upcomingBadgeHTML = (record.upcoming_arrival_date && !record.is_sold_out)
+    ? `<span class="upcoming-badge">📅 ${record.upcoming_arrival_date} 入荷予定</span>`
+    : '';
+
   return `
     <div class="card ${record.is_sold_out ? 'sold-out' : ''}" onclick="openModal('${record.id}')">
       <div class="image-wrapper">
         <img src="${record.image_url}" alt="${record.title}" loading="lazy" />
         ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         ${record.is_sold_out ? '<span class="soldout-badge">SOLD OUT</span>' : ''}
+        ${upcomingBadgeHTML}
       </div>
       <div class="card-content">
         <div class="genre-badges-container">
@@ -222,7 +237,7 @@ function openModal(recordId) {
   if (coverImg) coverImg.src = record.image_url || '';
   if (titleEl) titleEl.textContent = record.title || '';
   if (catEl) catEl.textContent = record.cat_no ? `Cat No: ${record.cat_no}` : '';
-  if (dateEl) dateEl.textContent = formatRecordDate(record.release_date, record.created_at);
+  if (dateEl) dateEl.textContent = formatRecordDate(record);
   if (externalLink) externalLink.href = record.item_url || '#';
 
   if (genreContainer) {
