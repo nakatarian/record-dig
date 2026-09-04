@@ -1,9 +1,10 @@
 name: 5-Min Record Scraper
 
 on:
-  schedule:
-    # 例: 毎時 2, 7, 12, 17, 22, 27, 32... 分に実行
-    - cron: '2/5 * * * *'
+  # cron-job.org からの呼び出しを受け取る設定
+  repository_dispatch:
+    types: [trigger-scraper]
+  # 手動実行用ボタン（GitHub上から手動で動かすことも可能）
   workflow_dispatch:
 
 jobs:
