@@ -147,28 +147,41 @@ function createRecordCard(record, latestScrapedTime) {
   const formattedMetaDate = formatRecordDate(record);
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
 
-  let recordTime = null;
-  if (record.updated_at) {
-    recordTime = new Date(record.updated_at).getTime();
-  } else if (record.release_date && (record.created_at || record.scraped_at)) {
-    const createdDate = new Date(record.created_at || record.scraped_at);
-    const hours = String(createdDate.getHours()).padStart(2, '0');
-    const minutes = String(createdDate.getMinutes()).padStart(2, '0');
-    const seconds = String(createdDate.getSeconds()).padStart(2, '0');
-    
-    const combinedIso = `${record.release_date}T${hours}:${minutes}:${seconds}`;
-    recordTime = new Date(combinedIso).getTime();
-  } else if (record.created_at || record.scraped_at) {
-    recordTime = new Date(record.created_at || record.scraped_at).getTime();
-  } else if (record.release_date) {
-    recordTime = new Date(record.release_date).getTime();
-  }
-
-  // 24時間以内の新着判定
+  // ==========================================
+  // release_date(日付) + scraped_at(時刻) で24時間以内か判定
+  // ==========================================
   let isNew = false;
-  if (recordTime) {
-    const diffInHours = (latestScrapedTime - recordTime) / (1000 * 60 * 60);
-    isNew = diffInHours >= 0 && diffInHours <= 24;
+
+  if (record.release_date) {
+    // 時刻ソースを取得（scraped_at > created_at > updated_at の順）
+    const timeSource = record.scraped_at || record.created_at || record.updated_at;
+    
+    let hours = '00';
+    let minutes = '00';
+    let seconds = '00';
+
+    if (timeSource) {
+      const timeObj = new Date(timeSource);
+      if (!isNaN(timeObj.getTime())) {
+        hours = String(timeObj.getHours()).padStart(2, '0');
+        minutes = String(timeObj.getMinutes()).padStart(2, '0');
+        seconds = String(timeObj.getSeconds()).padStart(2, '0');
+      }
+    }
+
+    // release_date (YYYY-MM-DD) と scraped_at の時刻 (HH:mm:ss) を合成
+    const cleanDateStr = record.release_date.replace(/\//g, '-');
+    const combinedIsoStr = `${cleanDateStr}T${hours}:${minutes}:${seconds}`;
+    const recordTime = new Date(combinedIsoStr).getTime();
+
+    // 現在時刻（Date.now()）との差分を時間単位で計算
+    if (!isNaN(recordTime)) {
+      const now = Date.now();
+      const diffInHours = (now - recordTime) / (1000 * 60 * 60);
+
+      // 合成日時が過去24時間以内（0 <= diff <= 24）であれば NEW マークを表示
+      isNew = diffInHours >= 0 && diffInHours <= 24;
+    }
   }
 
   // ★ 入荷予定バッジ（存在する場合のみ表示）
