@@ -25,7 +25,6 @@ def scrape_freestyle(existing_records_map):
     records_map = {}
     current_time_iso = datetime.now(timezone.utc).isoformat()
     
-    # 本日の日付と判定ライン（7日前）
     today = date.today()
     cutoff_past_date = today - timedelta(days=7)
 
@@ -75,7 +74,6 @@ def scrape_freestyle(existing_records_map):
                 if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
                     detected_genres.append(TAG_MAP[tag_lower])
 
-            # 対象タグが1つも含まれていなければスキップ
             if not detected_genres:
                 continue
 
@@ -137,28 +135,30 @@ def scrape_freestyle(existing_records_map):
                 cat_no = cat_match.group(1).split('\n')[0].strip()
 
             # --------------------------------------------------
-            # 画像URLの取得（修正点）
-            # 商品ジャケット画像を確実に特定
+            # 画像URLの取得（/photo/ や /item/ などを確実に捕捉）
             # --------------------------------------------------
             image_url = ""
-            # ページ内のすべての img からジャケット用のものを探索
             for img in detail_soup.find_all("img"):
                 src = img.get("src", "")
-                # ヘッダーやアイコン類を除外
-                if any(x in src for x in ["header", "logo", "cart", "icon", "banner", "button"]):
+                if not src: continue
+                
+                # ヘッダー・アイコン・ボタン類は除外
+                if any(x in src.lower() for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "listen"]):
                     continue
-                if any(x in src for x in ["/img/", "/listen/", "disco", ".jpg", ".jpeg", ".png"]):
+                
+                # photo, item, image フォルダ、または jpg/png 画像を特定
+                if any(x in src.lower() for x in ["photo", "item", "image", ".jpg", ".jpeg", ".png"]):
                     image_url = urljoin(item_url, src)
                     break
 
             # --------------------------------------------------
-            # ④ 在庫状態の判定
+            # 在庫状態の判定
             # --------------------------------------------------
             page_text_upper = page_text.upper()
             is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
             # --------------------------------------------------
-            # ③ 音声ファイル (.mp3) の抽出
+            # 音声ファイル (.mp3) の抽出
             # --------------------------------------------------
             audio_url = ""
             listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
@@ -175,27 +175,28 @@ def scrape_freestyle(existing_records_map):
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
             # --------------------------------------------------
-            # トラックリストの厳密取得（修正点）
-            # tags や注意事項を取り除き、純粋な曲名だけを抽出
+            # トラックリストの厳密取得（HTMLタグや tags: を除外）
             # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
 
-            # 曲名が書かれているテーブルセルを取得
-            label_spans = detail_soup.find_all("span", class_="txt_label")
-            for span in label_spans:
-                text_content = span.get_text(separator="\n")
-                for line in text_content.splitlines():
+            # 曲名が書いてある td セル（colspan="2"）を取得
+            track_td = detail_soup.find("td", attrs={"colspan": "2"})
+            if track_td:
+                # get_text(strip=True) ではなく改行区切りで純粋なテキストのみを抜き出す
+                lines = track_td.get_text(separator="\n").splitlines()
+                for line in lines:
                     clean_line = line.strip()
-                    # 不要な文字列・ハッシュタグ・注記を完全に排除
+                    # 不要なタグ文字列、ハッシュタグ、価格、注記、空行を完全排除
                     if (clean_line 
                         and not clean_line.startswith("tags:") 
                         and not clean_line.startswith("#") 
                         and not clean_line.startswith("※") 
                         and "ご購入は" not in clean_line 
-                        and "予約受付中" not in clean_line
+                        and "受付中" not in clean_line
                         and "Tweet" not in clean_line
-                        and "yen" not in clean_line):
+                        and "yen" not in clean_line
+                        and "Listen" not in clean_line):
                         parsed_track_lines.append(clean_line)
 
             if parsed_track_lines:
@@ -232,7 +233,6 @@ def scrape_freestyle(existing_records_map):
             item_id = item_url.split("=")[-1] if "=" in item_url else item_url
             records_map[item_id] = record_data
             
-            # ログ表示
             genres_label = ", ".join(detected_genres)
             print(f"  ✓ [FREESTYLE] [{genres_label}] ({release_date_str}) {title}")
 
