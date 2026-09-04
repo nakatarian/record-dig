@@ -55,19 +55,23 @@ HEADERS = {
 # 2. 通知・補助関数
 # ==========================================
 
-def send_discord_notification(count):
-    """ Discord Webhook で新着件数を通知 """
+def send_discord_notification(new_titles):
+    """ Discord Webhook で在庫ありの新着タイトル一覧を通知 """
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ DISCORD_WEBHOOK_URL が設定されていないため通知をスキップします。")
         return
 
+    count = len(new_titles)
+    titles_str = "\n".join([f"・{t}" for t in new_titles])
+    message = f"🎵 **【NEWTONE】新着レコードが {count} 件追加されました！（在庫あり）**\n\n{titles_str}"
+
     payload = {
-        "content": f"NEWTONEに新着レコード{count}件追加"
+        "content": message
     }
     try:
         res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         if res.status_code in [200, 204]:
-            print(f"📲 Discord通知を送信しました: NEWTONEに新着レコード{count}件追加")
+            print(f"📲 Discord通知を送信しました: NEWTONEに新着レコード {count} 件追加（在庫ありのみ）")
         else:
             print(f"❌ Discord通知送信失敗: {res.status_code} - {res.text}")
     except Exception as e:
@@ -258,21 +262,24 @@ def scrape_and_update():
     records_to_insert = list(records_map.values())
     if records_to_insert:
         try:
-            # ★ DBに存在しない新規件数を正確にカウント
-            new_items_count = sum(1 for r in records_to_insert if r["item_url"] not in existing_records)
+            # ★ 在庫あり（is_sold_out=False）かつ DB未登録 の新規タイトルだけを収集
+            notifiable_titles = [
+                r["title"] for r in records_to_insert 
+                if r["item_url"] not in existing_records and not r["is_sold_out"]
+            ]
             
             # データベースへUpsert（更新・挿入）
             supabase.table("records").upsert(records_to_insert, on_conflict="item_url").execute()
-            print(f"\n🎉 データベース書き込み完了！（新規件数: {new_items_count}件）")
+            print(f"\n🎉 データベース書き込み完了！（通知対象の新規盤: {len(notifiable_titles)}件）")
             
             # 古いレコードを整理（最新30件を保持）
             cleanup_old_records(limit=30)
 
-            # ★ 初回実行時ではなく、本当に新着が1件以上増えた時のみ Discord 通知を送信
-            if not is_first_run and new_items_count > 0:
-                send_discord_notification(new_items_count)
+            # ★ 初回実行時ではなく、在庫ありの新着が1件以上ある時のみタイトルリスト付きでDiscord通知
+            if not is_first_run and len(notifiable_titles) > 0:
+                send_discord_notification(notifiable_titles)
             else:
-                print("ℹ️ 新着レコードがないため、Discord通知をスキップしました。")
+                print("ℹ️ 在庫ありの新規追加盤がないため、Discord通知をスキップしました。")
 
         except Exception as e:
             print(f"  ❌ Supabaseエラー: {e}")
