@@ -113,7 +113,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
 
         # --------------------------------------------------
-        # 音声 & トラックリストの抽出
+        # 音声の抽出
         # --------------------------------------------------
         audio_url = ""
         listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
@@ -129,12 +129,27 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
                 filename = audio_match.group(1)
                 audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
-        # トラック名テキストの解析 (A1:, B1: などの行を抽出)
+        # --------------------------------------------------
+        # トラック名テキストの解析（改行を保持してA1:, B1:のみ抽出）
+        # --------------------------------------------------
         parsed_tracks = []
-        lines = page_text.split('\n')
-        for line in lines:
+        
+        # HTML内の<br>や<p>タグを事前に改行文字に置き換える
+        for tag in detail_soup.find_all(["br", "p"]):
+            tag.replace_with("\n")
+        
+        raw_text = detail_soup.get_text()
+        
+        for line in raw_text.split("\n"):
             line_str = line.strip()
-            # A1, A2, B1, B2, C1, 1., 2. などで始まるトラック名行を抽出
+            if not line_str:
+                continue
+            
+            # 日付パターン (2026.09.01 や 2026-09-01 など) はトラック名ではないので除外
+            if re.match(r'^20\d{2}[\./-]\d{2}[\./-]\d{2}', line_str):
+                continue
+
+            # A1, A2, B1, B2, C1, 1., 2. などトラック番号で始まる行のみ抽出
             if re.match(r'^(?:[A-Z]\d+|\d+[\.\)]|\([A-Z\d]+\))\s*[:\.\-]?\s*.+', line_str, re.IGNORECASE):
                 parsed_tracks.append({"title": line_str, "audio_url": ""})
 
