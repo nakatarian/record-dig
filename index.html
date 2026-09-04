@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- ★ この行を追加（検索エンジンの登録・巡回をブロック） -->
+  <!-- ★ 検索エンジンの登録・巡回をブロック -->
   <meta name="robots" content="noindex, nofollow">
 
   <title>Record Dig App</title>
@@ -16,7 +16,8 @@
       --card-hover: #22262e;
       --text-main: #f0f2f5;
       --text-sub: #8c96a5;
-      --accent-color: #2563eb;
+      --accent-site: #2563eb;   /* サイトボタン用アクセント色 (青) */
+      --accent-genre: #10b981;  /* ジャンルボタン用アクセント色 (エメラルドグリーン) */
       --badge-bg: #1e293b;
       --badge-text: #60a5fa;
       --modal-bg: #161920;
@@ -57,15 +58,15 @@
     .filter-container {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
       width: 100%;
     }
 
-    /* ★ サイト切替 & ジャンル切替共通バー ★ */
+    /* フィルターバー共通設定 */
     .site-filter,
     .category-filter {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       width: 100%;
       overflow-x: auto;
       white-space: nowrap;
@@ -78,29 +79,52 @@
       display: none;
     }
 
-    /* ボタン共通デザイン */
-    .filter-btn,
+    /* ★ サイト切替ボタン (1行目: 角丸長方形) ★ */
     .site-filter-btn {
       flex: 1;
       min-width: max-content;
       text-align: center;
       background-color: var(--card-bg);
       color: var(--text-sub);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .site-filter-btn.active {
+      background-color: var(--accent-site);
+      color: #fff;
+      border-color: var(--accent-site);
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+    }
+
+    /* ★ ジャンル切替ボタン (2行目: 完全に丸いバッジ型 & グリーン系) ★ */
+    .filter-btn {
+      flex: 1;
+      min-width: max-content;
+      text-align: center;
+      background-color: var(--card-bg);
+      color: var(--text-sub);
       border: 1px solid rgba(255, 255, 255, 0.05);
-      padding: 6px 10px;
-      border-radius: 16px;
+      padding: 6px 14px;
+      border-radius: 20px; /* 完全な丸型 */
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.3px;
       cursor: pointer;
       text-transform: uppercase;
-      transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      transition: all 0.15s ease;
     }
-    .filter-btn.active,
-    .site-filter-btn.active {
-      background-color: var(--accent-color);
-      color: #fff;
-      border-color: var(--accent-color);
+    .filter-btn.active {
+      background-color: var(--accent-genre);
+      color: #0f1115; /* テキストを濃くして視認性確保 */
+      border-color: var(--accent-genre);
+      font-weight: 800;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
     }
 
     /* レコードカード一覧 */
@@ -141,7 +165,7 @@
       object-fit: cover;
     }
 
-    /* ★ サイト識別バッジ（左上） ★ */
+    /* サイト識別バッジ（左上） */
     .site-badge {
       position: absolute;
       top: 8px;
@@ -162,7 +186,7 @@
       border: 1px solid rgba(255, 255, 255, 0.2);
     }
 
-    /* ★ NEW バッジ（サイトバッジの右側に配置調整） ★ */
+    /* NEW バッジ */
     .new-badge {
       position: absolute;
       top: 8px;
@@ -208,9 +232,9 @@
     }
     .genre-badge {
       display: inline-block;
-      background-color: rgba(30, 64, 175, 0.35);
-      color: #60a5fa;
-      border: 1px solid rgba(96, 165, 250, 0.25);
+      background-color: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(52, 211, 153, 0.25);
       font-size: 9px;
       font-weight: 700;
       padding: 2px 6px;
@@ -355,17 +379,16 @@
     </div>
 
     <div class="filter-container">
-      <!-- ★ 1行目: サイト切り替えボタン (ALL / N / T / F) ★ -->
+      <!-- ★ 1行目: サイト切り替え (Nを初期アクティブに設定) ★ -->
       <div class="site-filter">
-        <button class="site-filter-btn active" onclick="filterSite('ALL', this)">ALL SITES</button>
-        <button class="site-filter-btn" onclick="filterSite('newtone', this)">N (Newtone)</button>
-        <button class="site-filter-btn" onclick="filterSite('technoblue', this)">T (Techno.blue)</button>
-        <button class="site-filter-btn" onclick="filterSite('freestyle', this)">F (Freestyle)</button>
+        <button class="site-filter-btn active" onclick="filterSite('newtone', this)">N</button>
+        <button class="site-filter-btn" onclick="filterSite('technoblue', this)">T</button>
+        <button class="site-filter-btn" onclick="filterSite('freestyle', this)">F</button>
       </div>
 
-      <!-- ★ 2行目: ジャンル切り替えボタン ★ -->
+      <!-- ★ 2行目: ジャンル切り替え (ALL GENRES → ALL に変更 & 丸型) ★ -->
       <div class="category-filter">
-        <button class="filter-btn active" onclick="filterGenre('ALL', this)">ALL GENRES</button>
+        <button class="filter-btn active" onclick="filterGenre('ALL', this)">ALL</button>
         <button class="filter-btn" onclick="filterGenre('Tech House', this)">TECH HOUSE</button>
         <button class="filter-btn" onclick="filterGenre('Deep House', this)">DEEP HOUSE</button>
         <button class="filter-btn" onclick="filterGenre('Minimal', this)">MINIMAL</button>

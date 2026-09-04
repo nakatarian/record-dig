@@ -11,7 +11,7 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // グローバル変数
 let allRecords = [];
 let currentGenreFilter = 'ALL';
-let currentSiteFilter = 'ALL';
+let currentSiteFilter = 'newtone'; // ★ 初期表示を Newtone に設定
 
 // ==========================================
 // 2. 日時・表示用フォーマット & ソート関数
@@ -100,7 +100,7 @@ async function fetchRecords() {
     .select('*')
     .order('release_date', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
-    .limit(150); // ★ 複数サイト対応に伴い上限数を少し拡張しています
+    .limit(150);
 
   const { data, error } = await query;
   
@@ -222,7 +222,7 @@ function filterGenre(genre, btnElement) {
 }
 
 /**
- * サイトフィルター切替 (ALL / newtone / technoblue / freestyle)
+ * サイトフィルター切替 (newtone / technoblue / freestyle)
  */
 function filterSite(siteName, btnElement) {
   currentSiteFilter = siteName;
