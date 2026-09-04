@@ -138,21 +138,32 @@ function createRecordCard(record, latestScrapedTime) {
   const formattedMetaDate = formatRecordDate(record.release_date, record.created_at);
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
 
-  // 【修正：24時間以内判定ロジック】
-  // レコードの日付データ（release_date優先、無ければcreated_at/scraped_at）を取得
+  // 【★ 24時間以内判定ロジック修正 ★】
+  // release_date (日付) と created_at (時間) を組み合わせて精確な更新日時（ミリ秒）を作る
   let recordTime = null;
-  if (record.release_date) {
-    // "2026-08-31" などの日付文字列をミリ秒に変換
-    recordTime = new Date(record.release_date).getTime();
+  
+  if (record.release_date && record.created_at) {
+    // 例: release_date = "2026-09-03", created_at = "2026-09-04T13:25:00Z"
+    // created_at から時間（14:25など）を取り出して release_date と結合する
+    const createdDate = new Date(record.created_at);
+    const hours = String(createdDate.getHours()).padStart(2, '0');
+    const minutes = String(createdDate.getMinutes()).padStart(2, '0');
+    const seconds = String(createdDate.getSeconds()).padStart(2, '0');
+    
+    // "2026-09-03T14:25:00" の完全な日時文字列を生成
+    const combinedIso = `${record.release_date}T${hours}:${minutes}:${seconds}`;
+    recordTime = new Date(combinedIso).getTime();
   } else if (record.created_at || record.scraped_at) {
     recordTime = new Date(record.created_at || record.scraped_at).getTime();
+  } else if (record.release_date) {
+    recordTime = new Date(record.release_date).getTime();
   }
 
-  // スクリプト実行時間（latestScrapedTime）とレコード日付の差分を計算（ミリ秒）
+  // スクリプト実行時間（latestScrapedTime）または現在時間との差分（時間）を計算
   let isNew = false;
   if (recordTime) {
     const diffInHours = (latestScrapedTime - recordTime) / (1000 * 60 * 60);
-    // 差分が 0時間以上 24時間以内（86,400秒）のものだけ NEW を表示
+    // 差分が 0時間以上 24時間以内（86,400秒）のものに NEW を表示
     isNew = diffInHours >= 0 && diffInHours <= 24;
   }
 
