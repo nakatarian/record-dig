@@ -174,7 +174,7 @@ def scrape_freestyle(existing_records_map):
                     audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
 
             # --------------------------------------------------
-            # トラックリストの取得（1曲ずつ改行するよう変更）
+            # トラックリストの取得（修正点：1曲ずつ個別オブジェクトとして格納）
             # --------------------------------------------------
             tracks = []
             parsed_track_lines = []
@@ -184,17 +184,17 @@ def scrape_freestyle(existing_records_map):
                 lines = track_td.get_text(separator="\n").splitlines()
                 for line in lines:
                     clean_line = line.strip()
+                    # A1:, A2:, B1: などの行頭パターンにマッチするか確認
                     if re.match(r'^[A-D][1-9]\s*:', clean_line):
                         parsed_track_lines.append(clean_line)
 
-            # 1曲ずつ改行 (\n) で結合
+            # 1曲ごとに音源URLを紐付けて配列（リスト）に追加
             if parsed_track_lines:
-                combined_track_title = "\n".join(parsed_track_lines)
+                for line in parsed_track_lines:
+                    tracks.append({"title": line, "audio_url": audio_url})
             else:
-                combined_track_title = title
-
-            if audio_url:
-                tracks.append({"title": combined_track_title, "audio_url": audio_url})
+                # 特定パターンが見つからない場合のバックアップ
+                tracks.append({"title": title, "audio_url": audio_url})
 
             # --------------------------------------------------
             # データの組み立て
@@ -237,5 +237,7 @@ if __name__ == "__main__":
     for r in test_results:
         print(f"・ジャンル: {r['genres']} | タイトル: {r['title']} | 日付: {r['release_date']}")
         print(f"  画像: {r['image_url']}")
-        print(f"  音源: {r['audio_url']}")
-        print(f"  曲名:\n{r['tracks'][0]['title'] if r['tracks'] else 'なし'}\n")
+        print(f"  トラック数: {len(r['tracks'])}")
+        for idx, t in enumerate(r['tracks'], 1):
+            print(f"    [{idx}] {t['title']}")
+        print()
