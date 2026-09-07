@@ -107,12 +107,12 @@ function updateHeaderLastUpdated(records) {
 // ==========================================
 
 async function fetchRecords() {
-  // Supabaseからデータ取得
+  // Supabaseからデータ取得（全サイトのデータを十分カバーするため上限を500に拡張）
   let query = supabaseClient
     .from('records')
     .select('*')
     .order('release_date', { ascending: false, nullsFirst: false })
-    .limit(150);
+    .limit(500);
 
   const { data, error } = await query;
   
@@ -138,7 +138,7 @@ function applyFiltersAndRender() {
     });
   }
 
-  // 2. サイトフィルター
+  // 2. サイトフィルター (大文字小文字を無視して比較)
   if (currentSiteFilter !== 'ALL') {
     filtered = filtered.filter(r => (r.site || '').toLowerCase() === currentSiteFilter.toLowerCase());
   }
@@ -261,11 +261,11 @@ function openModal(recordId) {
 
   if (tracksContainer) {
     const tracks = record.tracks || [];
-    const isFreestyle = (record.site || '').toLowerCase() === 'freestyle';
+    const siteLower = (record.site || '').toLowerCase();
     let html = '';
 
-    // 【パターンA】Freestyle（1音声ファイル ＋ トラックリストテキスト）
-    if (isFreestyle) {
+    // 【パターンA】Freestyle のみ（1音声ファイル ＋ トラックリストテキスト）
+    if (siteLower === 'freestyle') {
       if (record.audio_url) {
         html += `
           <div class="main-audio-player" style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">
@@ -289,15 +289,23 @@ function openModal(recordId) {
         html = '<div style="color: var(--text-sub); font-size: 12px;">試聴音源・トラック情報はありません。</div>';
       }
     } 
-    // 【パターンB】Newtone（各トラックごとに個別音声ファイル）
+    // 【パターンB】Newtone & TEQ TOKYO（各トラックごとに個別音声プレイヤーを表示）
     else {
       if (tracks.length > 0) {
-        html = tracks.map(track => `
-          <div class="track-item" style="margin-bottom: 10px;">
-            <div class="track-name" style="font-size: 13px; margin-bottom: 4px;">${track.title}</div>
-            <audio class="track-audio" controls src="${track.audio_url}" preload="none" style="width: 100%;"></audio>
-          </div>
-        `).join('');
+        html = tracks.map(track => {
+          // トラックごとの音声URLがあればそちらを優先、無ければ代表audio_urlを適用
+          const currentAudioUrl = track.audio_url || record.audio_url || '';
+          return `
+            <div class="track-item" style="margin-bottom: 12px;">
+              <div class="track-name" style="font-size: 13px; margin-bottom: 4px; font-weight: 500;">${track.title}</div>
+              ${
+                currentAudioUrl 
+                  ? `<audio class="track-audio" controls src="${currentAudioUrl}" preload="none" style="width: 100%;"></audio>` 
+                  : '<div style="font-size: 11px; color: var(--text-sub);">試聴音源なし</div>'
+              }
+            </div>
+          `;
+        }).join('');
       } else if (record.audio_url) {
         html = `
           <div class="track-item">
