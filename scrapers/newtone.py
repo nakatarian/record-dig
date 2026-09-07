@@ -96,6 +96,7 @@ def scrape_newtone(existing_records_map):
         soup = BeautifulSoup(res.text, "html.parser")
         item_links = []
         seen_ids = set()
+        order_counter = 1  # ★ カテゴリ内での掲載順用カウンター
 
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -106,9 +107,11 @@ def scrape_newtone(existing_records_map):
                 item_id = parse_qs(parsed.query).get("id", [None])[0] or parsed.path.rstrip("/").split("/")[-1]
                 if item_id and item_id not in seen_ids:
                     seen_ids.add(item_id)
-                    item_links.append((item_id, full_url))
+                    # ★ リンクと一緒に掲載順 (order_counter) を保持
+                    item_links.append((item_id, full_url, order_counter))
+                    order_counter += 1
 
-        for item_id, item_url in item_links:
+        for item_id, item_url, sort_order in item_links:
             if item_id in records_map: continue
 
             time.sleep(0.3)
@@ -183,7 +186,7 @@ def scrape_newtone(existing_records_map):
                 audio_url = tracks[0]["audio_url"] if tracks else ""
 
                 record_data = {
-                    "site": "newtone",  # ★ NEWTONE用のサイト識別タグ
+                    "site": "newtone",  # NEWTONE用のサイト識別タグ
                     "item_url": item_url,
                     "title": title,
                     "cat_no": cat_no,
@@ -194,6 +197,7 @@ def scrape_newtone(existing_records_map):
                     "genres": detected_genres,
                     "is_sold_out": is_sold_out,
                     "release_date": release_date_str,
+                    "sort_order": sort_order,  # ★ サイト上の掲載順（1, 2, 3...）を保存
                     "scraped_at": current_time_iso
                 }
 
@@ -203,7 +207,7 @@ def scrape_newtone(existing_records_map):
                     record_data["created_at"] = current_time_iso
 
                 records_map[item_id] = record_data
-                print(f"  ✓ [{detected_genres[0]}] ({release_date_str}) {title}")
+                print(f"  ✓ [順位:{sort_order}] [{detected_genres[0]}] ({release_date_str}) {title}")
             except Exception as e:
                 print(f"  ❌ エラー {item_url}: {e}")
 

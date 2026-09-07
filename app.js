@@ -19,19 +19,36 @@ let currentSiteFilter = 'newtone'; // 初期表示は Newtone
 
 function sortRecordsByReleaseDate(records) {
   return records.sort((a, b) => {
-    // 1優先: release_date (更新日付 YYYY-MM-DD) の新しい順
+    // 優先度①: release_date (日付 YYYY-MM-DD) の新しい順
     const dateA = a.release_date || "";
     const dateB = b.release_date || "";
 
     if (dateA !== dateB) {
-      return dateB.localeCompare(dateA); // 降順 (新しい日付が上)
+      return dateB.localeCompare(dateA); // 降順
     }
 
-    // 2優先: scraped_at または created_at (取得・更新時刻) の新しい順
-    const timeA = new Date(a.scraped_at || a.created_at || a.updated_at || 0).getTime();
-    const timeB = new Date(b.scraped_at || b.created_at || b.updated_at || 0).getTime();
+    // 優先度②: created_at または scraped_at の「時間部分 (16:45等)」の新しい順
+    const getTimeMinutes = (record) => {
+      const targetStr = record.created_at || record.scraped_at || record.updated_at;
+      if (!targetStr) return -1;
+      const d = new Date(targetStr);
+      if (isNaN(d.getTime())) return -1;
+      return d.getHours() * 60 + d.getMinutes(); // 1日の経過分換算
+    };
 
-    return timeB - timeA; // 降順 (新しい時刻が上)
+    const timeA = getTimeMinutes(a);
+    const timeB = getTimeMinutes(b);
+
+    if (timeA !== timeB) {
+      return timeB - timeA; // 降順 (遅い時刻が上)
+    }
+
+    // 優先度③: サイト上の掲載順 (sort_order の昇順: 1, 2, 3...)
+    // NULLや未定義の場合は一番後ろ（Infinity）にする
+    const orderA = (a.sort_order !== null && a.sort_order !== undefined) ? Number(a.sort_order) : Infinity;
+    const orderB = (b.sort_order !== null && b.sort_order !== undefined) ? Number(b.sort_order) : Infinity;
+
+    return orderA - orderB; // 昇順
   });
 }
 
@@ -90,12 +107,11 @@ function updateHeaderLastUpdated(records) {
 // ==========================================
 
 async function fetchRecords() {
-  // Supabaseから release_date(降順) -> scraped_at(降順) で取得
+  // Supabaseからデータ取得
   let query = supabaseClient
     .from('records')
     .select('*')
     .order('release_date', { ascending: false, nullsFirst: false })
-    .order('scraped_at', { ascending: false, nullsFirst: false })
     .limit(150);
 
   const { data, error } = await query;
@@ -105,7 +121,7 @@ async function fetchRecords() {
     return;
   }
 
-  // JS側でも念のため二重ソートをかけて確実に整列
+  // JS側で優先度①〜③を適用して確実にソート
   allRecords = sortRecordsByReleaseDate(data || []);
   applyFiltersAndRender();
   updateHeaderLastUpdated(allRecords);
@@ -148,38 +164,18 @@ function createRecordCard(record, latestScrapedTime) {
   const genresList = record.genres && record.genres.length > 0 ? record.genres : [record.genre];
 
   // ==========================================
-  // release_date(日付) + scraped_at(時刻) で24時間以内か判定
+  // NEWバッジ判定（created_at / scraped_at が現在時刻から24時間以内か）
   // ==========================================
   let isNew = false;
+  const rawTimestamp = record.created_at || record.scraped_at;
 
-  if (record.release_date) {
-    // 時刻ソースを取得（scraped_at > created_at > updated_at の順）
-    const timeSource = record.scraped_at || record.created_at || record.updated_at;
-    
-    let hours = '00';
-    let minutes = '00';
-    let seconds = '00';
+  if (rawTimestamp) {
+    const recordTime = new Date(rawTimestamp).getTime();
+    const now = Date.now();
 
-    if (timeSource) {
-      const timeObj = new Date(timeSource);
-      if (!isNaN(timeObj.getTime())) {
-        hours = String(timeObj.getHours()).padStart(2, '0');
-        minutes = String(timeObj.getMinutes()).padStart(2, '0');
-        seconds = String(timeObj.getSeconds()).padStart(2, '0');
-      }
-    }
-
-    // release_date (YYYY-MM-DD) と scraped_at の時刻 (HH:mm:ss) を合成
-    const cleanDateStr = record.release_date.replace(/\//g, '-');
-    const combinedIsoStr = `${cleanDateStr}T${hours}:${minutes}:${seconds}`;
-    const recordTime = new Date(combinedIsoStr).getTime();
-
-    // 現在時刻（Date.now()）との差分を時間単位で計算
     if (!isNaN(recordTime)) {
-      const now = Date.now();
       const diffInHours = (now - recordTime) / (1000 * 60 * 60);
-
-      // 合成日時が過去24時間以内（0 <= diff <= 24）であれば NEW マークを表示
+      // DB格納日時が過去24時間以内（0 <= 時差 <= 24）であれば NEW
       isNew = diffInHours >= 0 && diffInHours <= 24;
     }
   }
@@ -270,7 +266,6 @@ function openModal(recordId) {
 
     // 【パターンA】Freestyle（1音声ファイル ＋ トラックリストテキスト）
     if (isFreestyle) {
-      // 1. 全曲共通の試聴プレイヤーを一番上に表示
       if (record.audio_url) {
         html += `
           <div class="main-audio-player" style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">
@@ -280,7 +275,6 @@ function openModal(recordId) {
         `;
       }
 
-      // 2. トラックリスト（A1, A2...などのテキスト）を一覧表示
       if (tracks.length > 0) {
         html += `<div class="track-list-text" style="display: flex; flex-direction: column; gap: 6px;">`;
         tracks.forEach(track => {

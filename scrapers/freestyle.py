@@ -20,7 +20,7 @@ HEADERS = {
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
 }
 
-def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, existing_records_map):
+def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date, now_jst, existing_records_map):
     """1つの商品詳細ページをスクレイピングする関数"""
     try:
         detail_res = session.get(item_url, timeout=15)
@@ -173,6 +173,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
             "is_sold_out": is_sold_out,
             "upcoming_arrival_date": upcoming_arrival_date,
             "release_date": release_date_str,
+            "sort_order": sort_order,  # ★ サイト上の掲載順（1, 2, 3...）を登録
             "scraped_at": now_jst.isoformat()
         }
 
@@ -190,7 +191,7 @@ def fetch_and_parse_item(item_url, session, today, cutoff_past_date, now_jst, ex
         item_id = item_url.split("=")[-1] if "=" in item_url else item_url
         
         genres_label = ", ".join(detected_genres)
-        print(f"  ✓ [FREESTYLE] [{genres_label}] ({release_date_str}) {title}")
+        print(f"  ✓ [FREESTYLE] [{genres_label}] (順位:{sort_order} / {release_date_str}) {title}")
         return item_id, record_data
 
     except Exception as e:
@@ -211,6 +212,7 @@ def scrape_freestyle(existing_records_map):
 
         target_links = []
         seen_urls = set()
+        global_order = 1  # ★ サイト全体での掲載順用カウンター
 
         # 1ページ目と2ページ目を順番に巡回してリンクを収集
         for page in [1, 2]:
@@ -235,38 +237,7 @@ def scrape_freestyle(existing_records_map):
                     full_url = urljoin(page_url, href).strip()
                     if full_url not in seen_urls:
                         seen_urls.add(full_url)
-                        target_links.append(full_url)
+                        # ★ リンクと一緒に掲載順 (global_order) を保持して保持リストに追加
+                        target_links.append((full_url, global_order))
+                        global_order += 1
                         page_links_count += 1
-
-            print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
-
-        print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
-
-        # 並列で詳細ページを分析
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(
-                    fetch_and_parse_item, 
-                    url, session, today, cutoff_past_date, now_jst, existing_records_map
-                ) 
-                for url in target_links
-            ]
-            
-            for future in as_completed(futures):
-                res = future.result()
-                if res:
-                    item_id, record_data = res
-                    records_map[item_id] = record_data
-
-        # 戻り値を整理する際、release_date -> scraped_at の順で降順（新しい順）にソート
-        results = list(records_map.values())
-        results.sort(
-            key=lambda x: (x.get("release_date") or "", x.get("scraped_at") or ""), 
-            reverse=True
-        )
-
-        return results
-
-    except Exception as e:
-        print(f"❌ [FREESTYLE] 全体処理中に予期せぬエラーが発生しました: {e}")
-        return []  # エラー発生時も None ではなく空配列を返して TypeError を回避
