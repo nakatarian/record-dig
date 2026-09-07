@@ -2,7 +2,8 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import time
-import re
+import json
+import html
 from datetime import datetime, timezone, timedelta, date
 
 BASE_URL = "https://teq-tokyo.com"
@@ -49,7 +50,7 @@ def scrape_teq(existing_records_map):
 
     print("\n🔍 [TEQ] /collections/new-releases より商品一覧を抽出中...")
 
-    # 30件取得（通常1ページに24〜30件あるため1〜2ページ巡回）
+    # 最大30件取得のため、1〜2ページ目を巡回
     for page in [1, 2]:
         page_url = NEW_RELEASES_URL.format(page=page)
         res = fetch_url(session, page_url)
@@ -67,7 +68,7 @@ def scrape_teq(existing_records_map):
                     seen_urls.add(full_url)
                     target_links.append((full_url, sort_order))
                     sort_order += 1
-                    if len(target_links) >= 30:  # 最大30件に変更
+                    if len(target_links) >= 30:
                         break
         
         if len(target_links) >= 30:
@@ -98,10 +99,10 @@ def scrape_teq(existing_records_map):
                 pub_date = pub_dt.date()
                 release_date_str = pub_date.strftime("%Y-%m-%d")
 
-                # 1週間以上前のデータに達した瞬間に処理（スクレイピング）を完全終了する
+                # 1週間以上前のデータに達した瞬間に処理を完全終了する
                 if pub_date < cutoff_date:
                     print(f"  ⏹️ 1週間以上前のデータ ({release_date_str}: {product_data.get('title')}) に達したため、処理を終了します。")
-                    break  # continue から break に変更
+                    break
 
             # 2. HTML詳細ページを取得（ジャンル・トラック・SOLD OUTの確認）
             res_html = fetch_url(session, item_url)
@@ -121,7 +122,7 @@ def scrape_teq(existing_records_map):
                         if target_key in style_txt and target_name not in detected_genres:
                             detected_genres.append(target_name)
 
-            # 3対象ジャンルのいずれにも該当しない場合はスキップ（次の商品の確認へ）
+            # 3対象ジャンルのいずれにも該当しない場合はスキップ
             if not detected_genres:
                 continue
 
@@ -138,35 +139,48 @@ def scrape_teq(existing_records_map):
                 if price_area and ("SOLD OUT" in price_area.text.upper() or "売り切れ" in price_area.text):
                     is_sold_out = True
 
-            # --- 【音声URL（MP3）の抽出（// 形式にも対応）】 ---
-            mp3_matches = re.findall(r'(?:https?:)?//[^\s\'"]+?\.mp3(?:\?[^\s\'"]*)?', res_html.text, re.IGNORECASE)
-            
-            # 重複を除去しつつ、https: を補完してリスト化
-            audio_urls = []
-            for url in mp3_matches:
-                full_audio_url = "https:" + url if url.startswith("//") else url
-                if full_audio_url not in audio_urls:
-                    audio_urls.append(full_audio_url)
-
-            # 代表audio_url（最初のMP3）
-            primary_audio_url = audio_urls[0] if audio_urls else ""
-
-            # --- 【トラック名 & 各トラックへのaudio_urlの割り当て】 ---
+            # --- 【class="itemTracksList" から data-files / data-names を抽出】 ---
             tracks = []
-            track_elems = detail_soup.select(".itemTracks-name")
-            
-            for idx, elem in enumerate(track_elems):
-                title_p = elem.select_one(".track-title")
-                track_title = title_p.text.strip() if title_p else elem.text.strip()
-                
-                # トラックに対応するMP3があれば個別に設定、なければ空文字
-                track_audio = audio_urls[idx] if idx < len(audio_urls) else ""
-                tracks.append({"title": track_title, "audio_url": track_audio})
+            audio_urls = []
+            tracks_list_elem = detail_soup.select_one(".itemTracksList")
 
-            # もしHTML上に .itemTracks-name がないが MP3 が見つかった場合のフォールバック
-            if not tracks and audio_urls:
-                for idx, a_url in enumerate(audio_urls):
-                    tracks.append({"title": f"Track {idx + 1}", "audio_url": a_url})
+            if tracks_list_elem:
+                raw_files = tracks_list_elem.get("data-files", "")
+                raw_names = tracks_list_elem.get("data-names", "")
+
+                try:
+                    # HTMLエンティティのエスケープ解除（&quot; 等）
+                    files_json_str = html.unescape(raw_files)
+                    names_json_str = html.unescape(raw_names)
+
+                    file_paths = json.loads(files_json_str) if files_json_str else []
+                    track_names = json.loads(names_json_str) if names_json_str else []
+
+                    # URLの補完処理 (\/\/teq-tokyo.com\... -> https://teq-tokyo.com/...)
+                    for f_path in file_paths:
+                        clean_path = f_path.replace("\\", "")  # エスケープ用バックスラッシュを除去
+                        if clean_path.startswith("//"):
+                            full_audio_url = "https:" + clean_path
+                        elif clean_path.startswith("/"):
+                            full_audio_url = urljoin(BASE_URL, clean_path)
+                        else:
+                            full_audio_url = clean_path
+
+                        audio_urls.append(full_audio_url)
+
+                    # トラックとURLのマッピング
+                    for idx, url_val in enumerate(audio_urls):
+                        t_name = track_names[idx] if idx < len(track_names) else f"Track {idx + 1}"
+                        tracks.append({
+                            "title": t_name,
+                            "audio_url": url_val
+                        })
+
+                except Exception as parse_err:
+                    print(f"  ⚠️ Tracks JSON解析エラー ({item_url}): {parse_err}")
+
+            # 代表audio_url（A1などの最初のトラック音声）
+            primary_audio_url = audio_urls[0] if audio_urls else ""
 
             # --- 【基本データの整形】 ---
             title = product_data.get("title", "").strip()
