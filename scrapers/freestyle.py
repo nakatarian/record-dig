@@ -1,231 +1,261 @@
-import os
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, parse_qs, urlparse
+from urllib.parse import urljoin
 import time
 import re
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-CATEGORIES = [
-    {"name": "Deep House", "url": "https://www.freestyle-online.net/products/list.php?category_id=11"},
-    {"name": "Tech House", "url": "https://www.freestyle-online.net/products/list.php?category_id=12"},
-    {"name": "Minimal", "url": "https://www.freestyle-online.net/products/list.php?category_id=13"}
-]
+# 正しいベースURL（wwwなし、list.php）
+FREESTYLE_BASE_URL = "https://freestyleonline.net/list.php?GENRE=ALL&SRT=U&DSP=A&PAGENO={page}"
 
-GENRE_MAP = {
-    "deep house": "Deep House",
-    "deep tech house": "Deep House",
-    "deep tech": "Deep House",
-    "tech house": "Tech House",
-    "minimal house": "Minimal",
+TAG_MAP = {
+    "techhouse": "Tech House",
     "minimal": "Minimal",
-    "minimal techno": "Minimal"
+    "deep": "Deep House"
 }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
 }
 
-def fetch_url(session, url, retries=3, timeout=30):
-    for i in range(retries):
-        try:
-            res = session.get(url, timeout=timeout)
-            if res.status_code == 200:
-                return res
-        except Exception as e:
-            if i == retries - 1:
-                raise e
-            time.sleep(2)
-    return None
+def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date, now_jst, existing_records_map):
+    """1つの商品詳細ページをスクレイピングする関数"""
+    try:
+        detail_res = session.get(item_url, timeout=15)
+        detail_res.encoding = detail_res.apparent_encoding or 'utf-8'
+        if detail_res.status_code != 200:
+            return None
 
-def extract_track_list_tracks(detail_soup, item_url):
-    tracks = []
-    # トラックリストの親要素（.track_list, .tracklist, テーブル等）を探す
-    track_container = detail_soup.select_one(".track_list, .tracklist, #tracklist, .track_info")
-    
-    if track_container:
-        nodes = track_container.select("li, tr, p, div")
-        for node in nodes:
-            text = node.text.strip()
-            if not text or "Track" in text:
+        detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+        page_text = detail_soup.text
+
+        # --------------------------------------------------
+        # タグの抽出
+        # --------------------------------------------------
+        detected_genres = []
+        tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text, re.IGNORECASE)
+        for t in tags_matched:
+            tag_lower = t.lower()
+            if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
+                detected_genres.append(TAG_MAP[tag_lower])
+
+        if not detected_genres:
+            return None
+
+        # --------------------------------------------------
+        # 日付の抽出 (release_date 用)
+        # --------------------------------------------------
+        item_date = None
+        upcoming_arrival_date = None
+
+        for tr in detail_soup.find_all("tr"):
+            tr_text = tr.text.strip()
+            date_match = re.search(r'20\d{2}[./-]\d{2}[./-]\d{2}', tr_text)
+            
+            if date_match:
+                found_date_str = date_match.group(0).replace('.', '-').replace('/', '-')
+                try:
+                    d_obj = datetime.strptime(found_date_str, "%Y-%m-%d").date()
+                    if "入荷予定" in tr_text:
+                        if d_obj > today:
+                            upcoming_arrival_date = d_obj.strftime("%Y-%m-%d")
+                    
+                    if "更新日" in tr_text:
+                        item_date = d_obj
+                except ValueError:
+                    pass
+
+        # ページ内に更新日がない場合は本日日付を設定
+        if not item_date:
+            item_date = today
+
+        # 7日以上前の過去データはスキップ
+        if item_date < cutoff_past_date:
+            return None
+
+        release_date_str = item_date.strftime("%Y-%m-%d")
+
+        # --------------------------------------------------
+        # タイトル・キャットナンバー
+        # --------------------------------------------------
+        title = ""
+        title_el = detail_soup.select_one("h1, h2, .item_title, font[size='+1']")
+        if title_el:
+            title = title_el.text.strip()
+        if not title and detail_soup.title:
+            title = detail_soup.title.text.strip()
+
+        cat_no = ""
+        cat_match = re.search(r'cat\.?no\s*:?\s*([A-Za-z0-9_\-\s\/]+)', page_text, re.IGNORECASE)
+        if cat_match:
+            cat_no = cat_match.group(1).split('\n')[0].strip()
+
+        # --------------------------------------------------
+        # 画像URL
+        # --------------------------------------------------
+        image_url = ""
+        for img in detail_soup.find_all("img"):
+            src = img.get("src", "")
+            if not src: continue
+            src_lower = src.lower()
+            if any(x in src_lower for x in ["header", "logo", "cart", "icon", "banner", "button", "panda", "twitter", "facebook", "listen_b.gif"]):
+                continue
+            if any(x in src_lower for x in ["/listen/img/", "/photo/", "/item/", "disco", ".jpg", ".jpeg", ".png"]):
+                image_url = urljoin(item_url, src)
+                break
+
+        # --------------------------------------------------
+        # 在庫状態
+        # --------------------------------------------------
+        page_text_upper = page_text.upper()
+        is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
+
+        # --------------------------------------------------
+        # 音声の抽出
+        # --------------------------------------------------
+        audio_url = ""
+        listen_a_tag = detail_soup.find("a", href=re.compile(r"OPENLISTEN", re.IGNORECASE))
+        if listen_a_tag:
+            href_attr = listen_a_tag.get("href", "")
+            m = re.search(r"OPENLISTEN\('([^']+)'\)", href_attr, re.IGNORECASE)
+            if m:
+                audio_url = urljoin(item_url, m.group(1))
+
+        if not audio_url:
+            audio_match = re.search(r"([a-zA-Z0-9_\-]+\.mp3)", page_text)
+            if audio_match:
+                filename = audio_match.group(1)
+                audio_url = f"https://freestyleonline.net/audio/mp3/{filename}"
+
+        # --------------------------------------------------
+        # トラック名テキストの解析
+        # --------------------------------------------------
+        parsed_tracks = []
+        for tag in detail_soup.find_all(["br", "p"]):
+            tag.replace_with("\n")
+        
+        raw_text = detail_soup.get_text()
+        
+        for line in raw_text.split("\n"):
+            line_str = line.strip()
+            if not line_str:
                 continue
             
-            # プレイヤー要素やリンクから音声URLを探す
-            audio_node = node.select_one("a[href*='.mp3'], audio source, [data-src*='.mp3']")
-            audio_url = ""
-            if audio_node:
-                src = audio_node.get("href") or audio_node.get("src") or audio_node.get("data-src")
-                if src:
-                    audio_url = urljoin(item_url, src.strip())
-            
-            if text and not any(t["title"] == text for t in tracks):
-                tracks.append({"title": text, "audio_url": audio_url})
-    
-    return tracks
+            if re.match(r'^20\d{2}[\./-]\d{2}[\./-]\d{2}', line_str):
+                continue
+
+            if re.match(r'^(?:[A-Z]\d+|\d+[\.\)]|\([A-Z\d]+\))\s*[:\.\-]?\s*.+', line_str, re.IGNORECASE):
+                parsed_tracks.append({"title": line_str, "audio_url": ""})
+
+        if not parsed_tracks:
+            parsed_tracks = [{"title": "Listen Sample (Full)", "audio_url": audio_url}]
+
+        # --------------------------------------------------
+        # データの組み立て
+        # --------------------------------------------------
+        record_data = {
+            "site": "freestyle",
+            "item_url": item_url,
+            "title": title,
+            "cat_no": cat_no,
+            "image_url": image_url,
+            "audio_url": audio_url,
+            "tracks": parsed_tracks,
+            "genre": detected_genres[0],
+            "genres": detected_genres,
+            "is_sold_out": is_sold_out,
+            "upcoming_arrival_date": upcoming_arrival_date,
+            "release_date": release_date_str,
+            "sort_order": sort_order,  # 掲載順 (1, 2, 3...)
+            "scraped_at": now_jst.isoformat()
+        }
+
+        created_at_val = now_jst.isoformat()
+        if isinstance(existing_records_map, dict) and item_url in existing_records_map:
+            exist_item = existing_records_map[item_url]
+            if isinstance(exist_item, dict):
+                created_at_val = exist_item.get("created_at", created_at_val)
+            elif isinstance(exist_item, str):
+                created_at_val = exist_item
+
+        record_data["created_at"] = created_at_val
+        item_id = item_url.split("=")[-1] if "=" in item_url else item_url
+        
+        genres_label = ", ".join(detected_genres)
+        print(f"  ✓ [順位:{sort_order}] [{genres_label}] ({release_date_str}) {title}")
+        return item_id, record_data
+
+    except Exception as e:
+        print(f"  ❌ エラー {item_url}: {e}")
+        return None
+
 
 def scrape_freestyle(existing_records_map):
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    records_map = {}
-    current_time_iso = datetime.now(timezone.utc).isoformat()
-    cutoff_date = date.today() - timedelta(days=7)
-
-    for cat in CATEGORIES:
-        print(f"\n🔍 [FREESTYLE] カテゴリ巡回開始: {cat['name']}")
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        records_map = {}
         
-        page = 1
-        stop_cat = False
-        sort_order_counter = 1  # サイト上の掲載順（1, 2, 3...）
+        JST = timezone(timedelta(hours=9))
+        now_jst = datetime.now(JST)
+        today = now_jst.date()
+        cutoff_past_date = today - timedelta(days=7)
 
-        while True:
-            if stop_cat:
-                break
+        target_links = []
+        seen_urls = set()
+        global_order = 1
 
-            page_url = f"{cat['url']}&pageno={page}" if page > 1 else cat['url']
-            print(f"  📄 ページ取得中 ({page}ページ目): {page_url}")
-
+        # 1ページ目と2ページ目を巡回してリンクを収集
+        for page in [1, 2]:
+            page_url = FREESTYLE_BASE_URL.format(page=page)
+            print(f"\n🔍 [FREESTYLE] {page}ページ目取得開始: {page_url}")
             try:
-                res = fetch_url(session, page_url, retries=3, timeout=30)
-                if not res or res.status_code != 200:
-                    print("  ⚠️ アクセス失敗のためカテゴリ移動")
-                    break
+                res = session.get(page_url, timeout=30)
+                res.encoding = res.apparent_encoding or 'utf-8'
+                if res.status_code != 200:
+                    print(f"  ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
+                    continue
             except Exception as e:
-                print(f"❌ [FREESTYLE] ページ取得エラー: {e}")
-                break
+                print(f"❌ [FREESTYLE] {page}ページ目 通信エラー: {e}")
+                continue
 
             soup = BeautifulSoup(res.text, "html.parser")
-            
-            # 商品リンクを抽出
-            item_links = []
-            seen_ids = set()
 
+            page_links_count = 0
             for a in soup.find_all("a", href=True):
                 href = a["href"]
-                if "products/detail.php" in href:
-                    full_url = urljoin(cat["url"], href).strip()
-                    parsed = urlparse(full_url)
-                    item_id = parse_qs(parsed.query).get("product_id", [None])[0]
-                    
-                    if item_id and item_id not in seen_ids:
-                        seen_ids.add(item_id)
-                        item_links.append((item_id, full_url, sort_order_counter))
-                        sort_order_counter += 1
+                if "detail.php" in href or "code=" in href:
+                    full_url = urljoin(page_url, href).strip()
+                    if full_url not in seen_urls:
+                        seen_urls.add(full_url)
+                        target_links.append((full_url, global_order))
+                        global_order += 1
+                        page_links_count += 1
 
-            if not item_links:
-                print("  ℹ️ 商品が見つからなくなったため次のカテゴリへ")
-                break
+            print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
 
-            # 詳細ページの解析
-            for item_id, item_url, sort_order in item_links:
-                if item_id in records_map:
-                    continue
+        print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
 
-                time.sleep(0.3)
-                try:
-                    detail_res = fetch_url(session, item_url, retries=2, timeout=20)
-                    if not detail_res or detail_res.status_code != 200:
-                        continue
-
-                    detail_soup = BeautifulSoup(detail_res.text, "html.parser")
-                    page_text = detail_soup.text
-
-                    # タイトル
-                    title = ""
-                    title_el = detail_soup.select_one("h2.title, .product_name, h1")
-                    if title_el:
-                        title = title_el.text.strip()
-                    if not title and detail_soup.title:
-                        title = detail_soup.title.text.strip()
-
-                    # 日付（入荷日・発売日）
-                    date_match = re.search(r'20\d{2}[-/.]\d{2}[-/.]\d{2}', page_text)
-                    release_date_str = None
-                    if date_match:
-                        raw_date_str = date_match.group(0).replace('/', '-').replace('.', '-')
-                        try:
-                            item_date = datetime.strptime(raw_date_str, "%Y-%m-%d").date()
-                            release_date_str = raw_date_str
-                            if item_date < cutoff_date:
-                                print(f"  ⏹️ {item_date} のデータ（1週間以上前）に達したため {cat['name']} の取得を終了します。")
-                                stop_cat = True
-                                break
-                        except ValueError:
-                            pass
-
-                    # ジャンル判定
-                    detected_genres = []
-                    for elem in detail_soup.find_all(string=True):
-                        txt = elem.strip().lower()
-                        if txt in GENRE_MAP and GENRE_MAP[txt] not in detected_genres:
-                            detected_genres.append(GENRE_MAP[txt])
-
-                    # 該当ジャンルがない場合はデフォルトでカテゴリ名を使用
-                    if not detected_genres and cat['name'] in GENRE_MAP.values():
-                        detected_genres.append(cat['name'])
-
-                    if not detected_genres:
-                        continue
-
-                    # 画像URL
-                    image_url = ""
-                    img_el = detail_soup.select_one(".product_image img, .main_image img, img[src*='/upload/']")
-                    if img_el and img_el.get("src"):
-                        image_url = urljoin(item_url, img_el["src"])
-
-                    # 型番 (Catalog No)
-                    cat_no = ""
-                    cat_match = re.search(r'(?:Cat\s*No\.?:?\s*|型番\s*:\s*)([A-Z0-9_\-\s\/]+)', page_text, re.IGNORECASE)
-                    if cat_match:
-                        cat_no = cat_match.group(1).strip()
-
-                    # 在庫状況
-                    page_text_upper = page_text.upper()
-                    is_sold_out = ("SOLDOUT" in page_text_upper or "売り切れ" in page_text_upper or "在庫なし" in page_text_upper)
-
-                    # トラックリスト・試聴音源
-                    tracks = extract_track_list_tracks(detail_soup, item_url)
-                    audio_url = tracks[0]["audio_url"] if tracks else ""
-
-                    # 代表音源が取れていない場合、全体からmp3リンクを探索
-                    if not audio_url:
-                        mp3_match = re.search(r'https?://[^\s\'"]+?\.mp3', detail_res.text, re.IGNORECASE)
-                        if mp3_match:
-                            audio_url = mp3_match.group(0)
-
-                    record_data = {
-                        "site": "freestyle",
-                        "item_url": item_url,
-                        "title": title,
-                        "cat_no": cat_no,
-                        "image_url": image_url,
-                        "audio_url": audio_url,
-                        "tracks": tracks,
-                        "genre": detected_genres[0],
-                        "genres": detected_genres,
-                        "is_sold_out": is_sold_out,
-                        "release_date": release_date_str,
-                        "sort_order": sort_order,
-                        "scraped_at": current_time_iso
-                    }
-
-                    if isinstance(existing_records_map, dict) and item_url in existing_records_map:
-                        record_data["created_at"] = existing_records_map[item_url]
-                    else:
-                        record_data["created_at"] = current_time_iso
-
+        # 並列で詳細ページを分析
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(
+                    fetch_and_parse_item, 
+                    url, sort_order, session, today, cutoff_past_date, now_jst, existing_records_map
+                ) 
+                for url, sort_order in target_links
+            ]
+            
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    item_id, record_data = res
                     records_map[item_id] = record_data
-                    print(f"  ✓ [順位:{sort_order}] [{detected_genres[0]}] ({release_date_str}) {title}")
 
-                except Exception as e:
-                    print(f"  ❌ エラー {item_url}: {e}")
+        return list(records_map.values())
 
-            # ページの移動判定
-            next_page_link = soup.select_one("a:-soup-contains('次へ'), a:-soup-contains('NEXT')")
-            if not next_page_link or stop_cat:
-                break
-
-            page += 1
-
-    return list(records_map.values())
+    except Exception as e:
+        print(f"❌ [FREESTYLE] 全体処理中に予期せぬエラーが発生しました: {e}")
+        return []

@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 # 各スクレイパーをモジュールとして読み込み
 from scrapers.newtone import scrape_newtone
+from scrapers.teq import scrape_teq
 from scrapers.freestyle import scrape_freestyle
 
 SUPABASE_URL = "https://slnraznxgatrefbuawqy.supabase.co"
@@ -28,7 +29,7 @@ def send_discord_notification(new_records):
         return
 
     count = len(new_records)
-    titles_str = "\n".join([f"・[{r.get('site', 'NEWTONE').upper()}] {r['title']}" for r in new_records])
+    titles_str = "\n".join([f"・[{r.get('site', 'UNKNOWN').upper()}] {r['title']}" for r in new_records])
     message = f"🎵 **新着レコードが {count} 件追加されました！（在庫あり）**\n\n{titles_str}"
 
     try:
@@ -63,12 +64,23 @@ def main():
     all_scraped_records = []
 
     # 1. NEWTONE 実行
+    print("\n==========================================")
+    print("▶ NEWTONE のスクレイピングを開始します")
+    print("==========================================")
     newtone_records = scrape_newtone(existing_records)
     all_scraped_records.extend(newtone_records)
 
-    # 2. TEQ TOKYO (後でここに追加)
+    # 2. TEQ TOKYO 実行
+    print("\n==========================================")
+    print("▶ TEQ TOKYO のスクレイピングを開始します")
+    print("==========================================")
+    teq_records = scrape_teq(existing_records)
+    all_scraped_records.extend(teq_records)
 
     # 3. FREESTYLE 実行
+    print("\n==========================================")
+    print("▶ FREESTYLE のスクレイピングを開始します")
+    print("==========================================")
     freestyle_records = scrape_freestyle(existing_records)
     all_scraped_records.extend(freestyle_records)
 
@@ -94,7 +106,7 @@ def main():
                 print("ℹ️ 在庫ありの新規追加盤がないため、Discord通知をスキップしました。")
 
         except Exception as e:
-            print(f"  ❌ Supabase保存エラー: {e}")
+            print(f"❌ Supabase保存エラー: {e}")
 
 if __name__ == "__main__":
     main()
