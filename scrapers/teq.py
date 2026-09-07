@@ -94,7 +94,6 @@ def scrape_teq(existing_records_map):
             release_date_str = None
             
             if published_at_str:
-                # 2026-09-06T19:00:03+09:00 から日付オブジェクトを作成
                 pub_dt = datetime.fromisoformat(published_at_str)
                 pub_date = pub_dt.date()
                 release_date_str = pub_date.strftime("%Y-%m-%d")
@@ -104,13 +103,14 @@ def scrape_teq(existing_records_map):
                     print(f"  ⏹️ 1週間以上前のデータに達したためスキップ: {release_date_str} ({product_data.get('title')})")
                     continue
 
-            # 2. ジャンル（Styles）の判定：詳細ページ（HTML）から取得
+            # 2. HTML詳細ページを取得（ジャンル・トラック・SOLD OUTの確認）
             res_html = fetch_url(session, item_url)
             if not res_html:
                 continue
 
             detail_soup = BeautifulSoup(res_html.text, "html.parser")
             
+            # --- 【ジャンル判定】 ---
             detected_genres = []
             styles_div = detail_soup.select_one(".itemInfo.styles, .styles")
             if styles_div:
@@ -121,11 +121,27 @@ def scrape_teq(existing_records_map):
                         if target_key in style_txt and target_name not in detected_genres:
                             detected_genres.append(target_name)
 
-            # 3対象ジャンル（Deep House, Tech House, Minimal）のいずれにも該当しない場合はスキップ
+            # 3対象ジャンルのいずれにも該当しない場合はスキップ
             if not detected_genres:
                 continue
 
-            # 3. トラック名 & 試聴URL (audio_url) の抽出
+            # --- 【SOLD OUT 判定（HTML解析による精度向上）】 ---
+            is_sold_out = False
+            
+            # A: カート投入ボタンの disabled 判定
+            submit_btn = detail_soup.select_one("button.product-form__submit, button[name='add']")
+            if submit_btn:
+                if submit_btn.has_attr("disabled"):
+                    is_sold_out = True
+                elif "SOLD OUT" in submit_btn.text.upper() or "売り切れ" in submit_btn.text:
+                    is_sold_out = True
+            else:
+                # B: ボタン自体が取れない場合はテキスト全体のキーワードから判定
+                price_area = detail_soup.select_one(".product-form, .product__info-container")
+                if price_area and ("SOLD OUT" in price_area.text.upper() or "売り切れ" in price_area.text):
+                    is_sold_out = True
+
+            # --- 【トラック名 & 試聴URL抽出】 ---
             tracks = []
             track_elems = detail_soup.select(".itemTracks-name")
             
@@ -134,36 +150,24 @@ def scrape_teq(existing_records_map):
                 track_title = title_p.text.strip() if title_p else elem.text.strip()
                 tracks.append({"title": track_title, "audio_url": ""})
 
-            # 音声URL（MP3）の抽出（JavaScript/Shopifyの埋め込みCDNリンクから抽出）
+            # 音声URL（MP3）の抽出
             audio_url = ""
             mp3_match = re.search(r'https?://[^\s\'"]+?\.mp3[^\s\'"]*', res_html.text, re.IGNORECASE)
             if mp3_match:
                 audio_url = mp3_match.group(0)
 
-            # トラックリストの先頭に代表audio_urlを設定（存在する場合）
             if tracks and audio_url:
                 tracks[0]["audio_url"] = audio_url
 
-            # 4. タイトル・型番（CatNo）・画像・在庫の整形
+            # --- 【基本データの整形】 ---
             title = product_data.get("title", "").strip()
-            
-            # 型番（variantsのSKUから取得）
             variants = product_data.get("variants", [])
             cat_no = variants[0].get("sku", "").strip() if variants else ""
-
-            # 画像URL
             images = product_data.get("images", [])
             image_url = images[0].get("src", "") if images else ""
 
-            # 在庫（variantsの在庫可能状態）
-            is_sold_out = True
-            if variants:
-                is_sold_out = not any(v.get("available", False) for v in variants)
-
-            # アイテム識別ID
             item_id = str(product_data.get("id"))
 
-            # レコードデータの構築
             record_data = {
                 "site": "teq",
                 "item_url": item_url,
@@ -173,10 +177,10 @@ def scrape_teq(existing_records_map):
                 "audio_url": audio_url,
                 "tracks": tracks,
                 "genre": detected_genres[0],
-                "genres": detected_genres,  # 複数該当したものを配列で保持
+                "genres": detected_genres,
                 "is_sold_out": is_sold_out,
-                "release_date": release_date_str,  # published_at から変換した日付 (YYYY-MM-DD)
-                "sort_order": order,               # 掲載順 (1〜50)
+                "release_date": release_date_str,
+                "sort_order": order,
                 "scraped_at": now_jst.isoformat()
             }
 
@@ -192,7 +196,8 @@ def scrape_teq(existing_records_map):
 
             records_map[item_id] = record_data
             genres_label = ", ".join(detected_genres)
-            print(f"  ✓ [順位:{order}] [{genres_label}] ({release_date_str}) {title}")
+            status_label = "[SOLD OUT]" if is_sold_out else "[IN STOCK]"
+            print(f"  ✓ [順位:{order}] {status_label} [{genres_label}] ({release_date_str}) {title}")
 
         except Exception as e:
             print(f"  ❌ エラー {item_url}: {e}")
