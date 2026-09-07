@@ -49,7 +49,7 @@ def scrape_teq(existing_records_map):
 
     print("\n🔍 [TEQ] /collections/new-releases より商品一覧を抽出中...")
 
-    # 50件取得するため、1〜2ページ目を巡回（1ページあたり通常24〜30件程度）
+    # 50件取得するため、1〜2ページ目を巡回
     for page in [1, 2]:
         page_url = NEW_RELEASES_URL.format(page=page)
         res = fetch_url(session, page_url)
@@ -125,10 +125,8 @@ def scrape_teq(existing_records_map):
             if not detected_genres:
                 continue
 
-            # --- 【SOLD OUT 判定（HTML解析による精度向上）】 ---
+            # --- 【SOLD OUT 判定】 ---
             is_sold_out = False
-            
-            # A: カート投入ボタンの disabled 判定
             submit_btn = detail_soup.select_one("button.product-form__submit, button[name='add']")
             if submit_btn:
                 if submit_btn.has_attr("disabled"):
@@ -136,28 +134,40 @@ def scrape_teq(existing_records_map):
                 elif "SOLD OUT" in submit_btn.text.upper() or "売り切れ" in submit_btn.text:
                     is_sold_out = True
             else:
-                # B: ボタン自体が取れない場合はテキスト全体のキーワードから判定
                 price_area = detail_soup.select_one(".product-form, .product__info-container")
                 if price_area and ("SOLD OUT" in price_area.text.upper() or "売り切れ" in price_area.text):
                     is_sold_out = True
 
-            # --- 【トラック名 & 試聴URL抽出】 ---
+            # --- 【音声URL（MP3）の抽出（// 形式にも対応）】 ---
+            # //teq-tokyo.com/cdn/shop/files/xxx.mp3 や https://... にマッチ
+            mp3_matches = re.findall(r'(?:https?:)?//[^\s\'"]+?\.mp3(?:\?[^\s\'"]*)?', res_html.text, re.IGNORECASE)
+            
+            # 重複を除去しつつ、https: を補完してリスト化
+            audio_urls = []
+            for url in mp3_matches:
+                full_audio_url = "https:" + url if url.startswith("//") else url
+                if full_audio_url not in audio_urls:
+                    audio_urls.append(full_audio_url)
+
+            # 代表audio_url（最初のMP3）
+            primary_audio_url = audio_urls[0] if audio_urls else ""
+
+            # --- 【トラック名 & 各トラックへのaudio_urlの割り当て】 ---
             tracks = []
             track_elems = detail_soup.select(".itemTracks-name")
             
-            for elem in track_elems:
+            for idx, elem in enumerate(track_elems):
                 title_p = elem.select_one(".track-title")
                 track_title = title_p.text.strip() if title_p else elem.text.strip()
-                tracks.append({"title": track_title, "audio_url": ""})
+                
+                # トラックに対応するMP3があれば個別に設定、なければ空文字
+                track_audio = audio_urls[idx] if idx < len(audio_urls) else ""
+                tracks.append({"title": track_title, "audio_url": track_audio})
 
-            # 音声URL（MP3）の抽出
-            audio_url = ""
-            mp3_match = re.search(r'https?://[^\s\'"]+?\.mp3[^\s\'"]*', res_html.text, re.IGNORECASE)
-            if mp3_match:
-                audio_url = mp3_match.group(0)
-
-            if tracks and audio_url:
-                tracks[0]["audio_url"] = audio_url
+            # もしHTML上に .itemTracks-name がないが MP3 が見つかった場合のフォールバック
+            if not tracks and audio_urls:
+                for idx, a_url in enumerate(audio_urls):
+                    tracks.append({"title": f"Track {idx + 1}", "audio_url": a_url})
 
             # --- 【基本データの整形】 ---
             title = product_data.get("title", "").strip()
@@ -174,7 +184,7 @@ def scrape_teq(existing_records_map):
                 "title": title,
                 "cat_no": cat_no,
                 "image_url": image_url,
-                "audio_url": audio_url,
+                "audio_url": primary_audio_url,
                 "tracks": tracks,
                 "genre": detected_genres[0],
                 "genres": detected_genres,
@@ -197,7 +207,8 @@ def scrape_teq(existing_records_map):
             records_map[item_id] = record_data
             genres_label = ", ".join(detected_genres)
             status_label = "[SOLD OUT]" if is_sold_out else "[IN STOCK]"
-            print(f"  ✓ [順位:{order}] {status_label} [{genres_label}] ({release_date_str}) {title}")
+            audio_status = f"[Audio: {len(audio_urls)}件]" if audio_urls else "[Audio: なし]"
+            print(f"  ✓ [順位:{order}] {status_label} {audio_status} [{genres_label}] ({release_date_str}) {title}")
 
         except Exception as e:
             print(f"  ❌ エラー {item_url}: {e}")
