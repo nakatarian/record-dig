@@ -49,7 +49,7 @@ def scrape_teq(existing_records_map):
 
     print("\n🔍 [TEQ] /collections/new-releases より商品一覧を抽出中...")
 
-    # 50件取得するため、1〜2ページ目を巡回
+    # 30件取得（通常1ページに24〜30件あるため1〜2ページ巡回）
     for page in [1, 2]:
         page_url = NEW_RELEASES_URL.format(page=page)
         res = fetch_url(session, page_url)
@@ -67,10 +67,10 @@ def scrape_teq(existing_records_map):
                     seen_urls.add(full_url)
                     target_links.append((full_url, sort_order))
                     sort_order += 1
-                    if len(target_links) >= 50:
+                    if len(target_links) >= 30:  # 最大30件に変更
                         break
         
-        if len(target_links) >= 50:
+        if len(target_links) >= 30:
             break
 
     print(f"  📦 抽出された商品リンク: 上から {len(target_links)} 件")
@@ -98,10 +98,10 @@ def scrape_teq(existing_records_map):
                 pub_date = pub_dt.date()
                 release_date_str = pub_date.strftime("%Y-%m-%d")
 
-                # 1週間以上前のデータはスキップ
+                # 1週間以上前のデータに達した瞬間に処理（スクレイピング）を完全終了する
                 if pub_date < cutoff_date:
-                    print(f"  ⏹️ 1週間以上前のデータに達したためスキップ: {release_date_str} ({product_data.get('title')})")
-                    continue
+                    print(f"  ⏹️ 1週間以上前のデータ ({release_date_str}: {product_data.get('title')}) に達したため、処理を終了します。")
+                    break  # continue から break に変更
 
             # 2. HTML詳細ページを取得（ジャンル・トラック・SOLD OUTの確認）
             res_html = fetch_url(session, item_url)
@@ -121,7 +121,7 @@ def scrape_teq(existing_records_map):
                         if target_key in style_txt and target_name not in detected_genres:
                             detected_genres.append(target_name)
 
-            # 3対象ジャンルのいずれにも該当しない場合はスキップ
+            # 3対象ジャンルのいずれにも該当しない場合はスキップ（次の商品の確認へ）
             if not detected_genres:
                 continue
 
@@ -139,7 +139,6 @@ def scrape_teq(existing_records_map):
                     is_sold_out = True
 
             # --- 【音声URL（MP3）の抽出（// 形式にも対応）】 ---
-            # //teq-tokyo.com/cdn/shop/files/xxx.mp3 や https://... にマッチ
             mp3_matches = re.findall(r'(?:https?:)?//[^\s\'"]+?\.mp3(?:\?[^\s\'"]*)?', res_html.text, re.IGNORECASE)
             
             # 重複を除去しつつ、https: を補完してリスト化
