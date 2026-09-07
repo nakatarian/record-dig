@@ -138,9 +138,18 @@ function applyFiltersAndRender() {
     });
   }
 
-  // 2. サイトフィルター (大文字小文字を無視して比較)
+  // 2. サイトフィルター (文字前後の余白を除去して比較)
   if (currentSiteFilter !== 'ALL') {
-    filtered = filtered.filter(r => (r.site || '').toLowerCase() === currentSiteFilter.toLowerCase());
+    const targetSiteFilter = currentSiteFilter.trim().toLowerCase();
+    
+    filtered = filtered.filter(r => {
+      const recordSite = (r.site || '').trim().toLowerCase();
+      // 'teq' や 'teq tokyo' や 't' などの表記揺れを吸収
+      if (targetSiteFilter === 'teq' || targetSiteFilter === 't') {
+        return recordSite === 'teq' || recordSite === 'teq tokyo' || recordSite === 't';
+      }
+      return recordSite === targetSiteFilter;
+    });
   }
 
   renderRecords(filtered);
@@ -293,7 +302,6 @@ function openModal(recordId) {
     else {
       if (tracks.length > 0) {
         html = tracks.map(track => {
-          // トラックごとの音声URLがあればそちらを優先、無ければ代表audio_urlを適用
           const currentAudioUrl = track.audio_url || record.audio_url || '';
           return `
             <div class="track-item" style="margin-bottom: 12px;">
