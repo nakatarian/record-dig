@@ -19,31 +19,15 @@ let currentSiteFilter = 'newtone'; // 初期表示は Newtone
 
 function sortRecordsByReleaseDate(records) {
   return records.sort((a, b) => {
-    // 優先度①: release_date (日付 YYYY-MM-DD) の新しい順
-    const dateA = a.release_date || "";
-    const dateB = b.release_date || "";
-
-    if (dateA !== dateB) {
-      return dateB.localeCompare(dateA); // 降順
-    }
-
-    // 優先度②: created_at または scraped_at の「時間部分 (16:45等)」の新しい順
-    const getTimeMinutes = (record) => {
-      const targetStr = record.created_at || record.scraped_at || record.updated_at;
-      if (!targetStr) return -1;
-      const d = new Date(targetStr);
-      if (isNaN(d.getTime())) return -1;
-      return d.getHours() * 60 + d.getMinutes(); // 1日の経過分換算
-    };
-
-    const timeA = getTimeMinutes(a);
-    const timeB = getTimeMinutes(b);
+    // 優先度①: created_at (DB初回登録日時) の新しい順 (降順)
+    const timeA = a.created_at || a.scraped_at ? new Date(a.created_at || a.scraped_at).getTime() : 0;
+    const timeB = b.created_at || b.scraped_at ? new Date(b.created_at || b.scraped_at).getTime() : 0;
 
     if (timeA !== timeB) {
-      return timeB - timeA; // 降順 (遅い時刻が上)
+      return timeB - timeA; // 降順 (新しい日時が上)
     }
 
-    // 優先度③: サイト上の掲載順 (sort_order の昇順: 1, 2, 3...)
+    // 優先度②: サイト上の掲載順 (sort_order の昇順: 1, 2, 3...)
     // NULLや未定義の場合は一番後ろ（Infinity）にする
     const orderA = (a.sort_order !== null && a.sort_order !== undefined) ? Number(a.sort_order) : Infinity;
     const orderB = (b.sort_order !== null && b.sort_order !== undefined) ? Number(b.sort_order) : Infinity;
@@ -58,17 +42,22 @@ function formatRecordDate(record) {
     return record.updated_display;
   }
 
-  // 従来通りのフォールバック処理
-  let timeStr = "";
-  if (record.created_at || record.scraped_at) {
-    const dateObj = new Date(record.created_at || record.scraped_at);
-    const hours = String(dateObj.getHours()).padStart(2, '0');
-    const minutes = String(dateObj.getMinutes()).padStart(2, '0');
-    timeStr = ` (${hours}:${minutes}更新)`;
+  // created_at または scraped_at の日時を整形して表示 (YYYY-MM-DD (HH:MM更新))
+  const rawDateStr = record.created_at || record.scraped_at;
+  if (rawDateStr) {
+    const d = new Date(rawDateStr);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} (${hh}:${min}更新)`;
+    }
   }
-  
-  const baseDate = record.release_date || "日付不明";
-  return `${baseDate}${timeStr}`;
+
+  // バックアップ表記
+  return record.release_date || "日付不明";
 }
 
 function getLatestScrapedTime(records) {
@@ -107,11 +96,11 @@ function updateHeaderLastUpdated(records) {
 // ==========================================
 
 async function fetchRecords() {
-  // Supabaseからデータ取得（全サイトのデータを十分カバーするため上限を500に拡張）
+  // Supabaseからデータ取得（created_atの降順で取得）
   let query = supabaseClient
     .from('records')
     .select('*')
-    .order('release_date', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false, nullsFirst: false })
     .limit(500);
 
   const { data, error } = await query;
@@ -121,7 +110,7 @@ async function fetchRecords() {
     return;
   }
 
-  // JS側で優先度①〜③を適用して確実にソート
+  // JS側で優先度①(created_at降順) ➔ 優先度②(sort_order昇順) を適用して確実にソート
   allRecords = sortRecordsByReleaseDate(data || []);
   applyFiltersAndRender();
   updateHeaderLastUpdated(allRecords);
