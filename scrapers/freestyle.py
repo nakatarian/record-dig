@@ -9,9 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 正しいベースURL（wwwなし、list.php）
 FREESTYLE_BASE_URL = "https://freestyleonline.net/list.php?GENRE=ALL&SRT=U&DSP=A&PAGENO={page}"
 
+# 対象とするジャンル（小文字・スペース有無を網羅）
 TAG_MAP = {
     "techhouse": "Tech House",
+    "tech house": "Tech House",
     "minimal": "Minimal",
+    "deephouse": "Deep House",
+    "deep house": "Deep House",
     "deep": "Deep House"
 }
 
@@ -32,15 +36,32 @@ def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date,
         page_text = detail_soup.text
 
         # --------------------------------------------------
-        # タグの抽出
+        # タグの抽出（HTMLから直接判定・大文字小文字対応）
         # --------------------------------------------------
         detected_genres = []
-        tags_matched = re.findall(r'#([a-zA-Z0-9]+)', page_text, re.IGNORECASE)
-        for t in tags_matched:
-            tag_lower = t.lower()
-            if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
-                detected_genres.append(TAG_MAP[tag_lower])
+        
+        # 1. <span class="txt_label"> 内の <a> タグからタグ抽出
+        label_span = detail_soup.find("span", class_="txt_label")
+        if label_span:
+            for a_tag in label_span.find_all("a"):
+                # 小文字化（.lower()）して表記揺れを吸収
+                raw_tag = a_tag.text.replace("#", "").strip().lower()
+                clean_tag = raw_tag.replace(" ", "") # スペース除去比較用
+                
+                for map_key, genre_val in TAG_MAP.items():
+                    if map_key.replace(" ", "") == clean_tag:
+                        if genre_val not in detected_genres:
+                            detected_genres.append(genre_val)
 
+        # 2. 上記で見つからなかった場合の予備（正規表現）
+        if not detected_genres:
+            tags_matched = re.findall(r'[#＃]([a-zA-Z0-9]+)', page_text, re.IGNORECASE)
+            for t in tags_matched:
+                tag_lower = t.lower()
+                if tag_lower in TAG_MAP and TAG_MAP[tag_lower] not in detected_genres:
+                    detected_genres.append(TAG_MAP[tag_lower])
+
+        # TAG_MAPに含まれない商品（対象ジャンル外）はスキップして除外する
         if not detected_genres:
             return None
 
@@ -110,17 +131,13 @@ def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date,
         # 在庫状態（<span class="txt_soldout"> の有無でピンポイント判定）
         # --------------------------------------------------
         is_sold_out = False
-
-        # 1. 開発者ツールで確認した class="txt_soldout" のタグが存在するか判定
         soldout_span = detail_soup.find("span", class_="txt_soldout")
         if soldout_span:
             is_sold_out = True
         else:
-            # 2. 念のためOrderボタン（購入ボタン）の有無でもダブルチェック
             order_btn = detail_soup.find("input", alt=re.compile(r"order", re.IGNORECASE)) or \
                         detail_soup.find("img", src=re.compile(r"order", re.IGNORECASE))
             
-            # Orderボタンが見つからず、かつテキストにSOLD OUTが含まれる場合のみTrue
             if not order_btn and "SOLD OUT" in page_text.upper():
                 is_sold_out = True
 
@@ -196,11 +213,11 @@ def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date,
         item_id = item_url.split("=")[-1] if "=" in item_url else item_url
         
         genres_label = ", ".join(detected_genres)
-        print(f"  ✓ [順位:{sort_order}] [{genres_label}] ({release_date_str}) {title}")
+        print(f"   ✓ [順位:{sort_order}] [{genres_label}] ({release_date_str}) {title}")
         return item_id, record_data
 
     except Exception as e:
-        print(f"  ❌ エラー {item_url}: {e}")
+        print(f"   ❌ エラー {item_url}: {e}")
         return None
 
 
@@ -227,7 +244,7 @@ def scrape_freestyle(existing_records_map):
                 res = session.get(page_url, timeout=30)
                 res.encoding = res.apparent_encoding or 'utf-8'
                 if res.status_code != 200:
-                    print(f"  ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
+                    print(f"   ⚠️ FREESTYLE {page}ページ目へのアクセスに失敗しました。")
                     continue
             except Exception as e:
                 print(f"❌ [FREESTYLE] {page}ページ目 通信エラー: {e}")
@@ -246,7 +263,7 @@ def scrape_freestyle(existing_records_map):
                         global_order += 1
                         page_links_count += 1
 
-            print(f"  📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
+            print(f"   📦 {page}ページ目から抽出された新規商品リンク: {page_links_count} 件")
 
         print(f"\n合計抽出リンク数: {len(target_links)} 件（1〜2ページ合算）")
 
