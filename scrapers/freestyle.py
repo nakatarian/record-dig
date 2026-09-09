@@ -107,10 +107,22 @@ def fetch_and_parse_item(item_url, sort_order, session, today, cutoff_past_date,
                 break
 
         # --------------------------------------------------
-        # 在庫状態
+        # 在庫状態（<span class="txt_soldout"> の有無でピンポイント判定）
         # --------------------------------------------------
-        page_text_upper = page_text.upper()
-        is_sold_out = any(k in page_text_upper for k in ["OUT OF STOCK", "SOLD OUT", "在庫なし", "売り切れ"])
+        is_sold_out = False
+
+        # 1. 開発者ツールで確認した class="txt_soldout" のタグが存在するか判定
+        soldout_span = detail_soup.find("span", class_="txt_soldout")
+        if soldout_span:
+            is_sold_out = True
+        else:
+            # 2. 念のためOrderボタン（購入ボタン）の有無でもダブルチェック
+            order_btn = detail_soup.find("input", alt=re.compile(r"order", re.IGNORECASE)) or \
+                        detail_soup.find("img", src=re.compile(r"order", re.IGNORECASE))
+            
+            # Orderボタンが見つからず、かつテキストにSOLD OUTが含まれる場合のみTrue
+            if not order_btn and "SOLD OUT" in page_text.upper():
+                is_sold_out = True
 
         # --------------------------------------------------
         # 音声の抽出
